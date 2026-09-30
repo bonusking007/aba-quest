@@ -6,9 +6,7 @@
 -- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
 -- ==========================================
 local ALLOWED_USERS = {
-    "Bunowaiau359",
-    "Krobsans906",
-    "Sodermaae3535"
+    "Bunowaiau359"
 }
 
 local Players = game:GetService("Players")
