@@ -143,7 +143,7 @@ local function notify(message)
 end
 
 -- ==========================================
--- 🛠️ Helper Functions สำหรับเลือกตัวละคร (จากไฟล์ที่ 2)
+-- 🛠️ Helper Functions สำหรับตรวจสอบและเลือกตัวละคร
 -- ==========================================
 local function getInput()
     local bp = LocalPlayer:FindFirstChild("Backpack")
@@ -151,71 +151,180 @@ local function getInput()
     return (bp and bp:FindFirstChild("Input")) or (c and c:FindFirstChild("Input")) or LocalPlayer:FindFirstChild("Input")
 end
 
-local function fireCharacterSelect(charName)
-    if not charName or charName == "" then return end
+-- ฟังก์ชันตรวจสอบว่าตัวละครปัจจุบันตรงกับชื่อเควสต์หรือไม่
+local function isCharacterMatching(targetChar)
+    if not targetChar or targetChar == "" then return true end
+    local target = string.lower(string.gsub(targetChar, "%s+", ""))
 
-    -- 1. เลือกผ่าน ServerTraits.Choose (ระบบหลักของ ABA)
-    pcall(function()
-        local bp = LocalPlayer:FindFirstChild("Backpack")
-        local serverTraits = bp and (bp:FindFirstChild("ServerTraits") or bp:WaitForChild("ServerTraits", 3))
-        local choose = serverTraits and (serverTraits:FindFirstChild("Choose") or serverTraits:WaitForChild("Choose", 3))
-        if choose then
-            choose:FireServer(charName)
-            task.wait(0.15)
-            choose:FireServer("PLAY")
-        end
-    end)
+    local char = LocalPlayer.Character
+    if not char then return false end
 
-    -- 2. เลือกผ่าน Input Remote
-    pcall(function()
-        local inp = getInput()
-        if inp then
-            inp:FireServer("CharacterButton", charName)
-            task.wait(0.1)
-            inp:FireServer("ClickPlay")
+    -- 1. เช็ค StringValue หรือ Attribute ภายใน Character Model
+    local charVal = char:FindFirstChild("Character")
+    if charVal and charVal:IsA("StringValue") and charVal.Value ~= "" then
+        local val = string.lower(string.gsub(charVal.Value, "%s+", ""))
+        if string.find(val, target, 1, true) or string.find(target, val, 1, true) then
+            return true
         end
-    end)
+    end
+
+    local attr = char:GetAttribute("Character")
+    if attr then
+        local val = string.lower(string.gsub(tostring(attr), "%s+", ""))
+        if string.find(val, target, 1, true) or string.find(target, val, 1, true) then
+            return true
+        end
+    end
+
+    -- 2. เช็คชื่อโฟลเดอร์/สคริปต์/วัตถุภายใน Character
+    for _, child in ipairs(char:GetChildren()) do
+        local cName = string.lower(string.gsub(child.Name, "%s+", ""))
+        if string.find(cName, target, 1, true) then
+            return true
+        end
+        if (child:IsA("StringValue") or child:IsA("ObjectValue")) and child.Value then
+            local vName = string.lower(string.gsub(tostring(child.Value), "%s+", ""))
+            if string.find(vName, target, 1, true) then
+                return true
+            end
+        end
+    end
+
+    -- 3. เช็คจาก Backpack (ชื่อสกิล หรือ Value ตัวละคร)
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        local bpVal = bp:FindFirstChild("Character")
+        if bpVal and bpVal:IsA("StringValue") and bpVal.Value ~= "" then
+            local val = string.lower(string.gsub(bpVal.Value, "%s+", ""))
+            if string.find(val, target, 1, true) or string.find(target, val, 1, true) then
+                return true
+            end
+        end
+        for _, item in ipairs(bp:GetChildren()) do
+            local iName = string.lower(string.gsub(item.Name, "%s+", ""))
+            if string.find(iName, target, 1, true) then
+                return true
+            end
+        end
+    end
+
+    -- 4. เช็คจากข้อความบน HUD ใน PlayerGui
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local hud = pg and pg:FindFirstChild("HUD")
+    if hud then
+        for _, desc in ipairs(hud:GetDescendants()) do
+            if desc:IsA("TextLabel") and desc.Text ~= "" then
+                local tName = string.lower(string.gsub(desc.Text, "%s+", ""))
+                if string.find(tName, target, 1, true) then
+                    return true
+                end
+            elseif desc:IsA("StringValue") and desc.Value ~= "" then
+                local vName = string.lower(string.gsub(desc.Value, "%s+", ""))
+                if string.find(vName, target, 1, true) then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
-local function switchCharacterWithReset(charName)
-    if not charName or charName == "" then return end
-    notify("Switching character to: " .. charName)
-    print("🔄 Changing character to: " .. charName)
+-- ฟังก์ชันสแปม Remote เปลี่ยนตัวละคร พร้อม Reset และหน่วงเวลาป้องกันแลค
+local function ensureCharacter(targetChar, runningCheck)
+    if not targetChar or targetChar == "" then return true end
+    if isCharacterMatching(targetChar) then
+        print("✅ Current character already matches: " .. targetChar)
+        return true
+    end
 
-    -- ส่ง Remote เลือกตัวละครรอบแรก
-    fireCharacterSelect(charName)
-    task.wait(0.5)
+    notify("Mismatch! Switching to: " .. targetChar)
+    print("🔄 Character mismatch detected. Starting switch process to: " .. targetChar)
 
-    -- รีเซ็ตตัวละครเพื่อให้เกมสลับตัว
-    pcall(function()
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
-            hum.Health = 0
+    local attempt = 0
+    local maxAttempts = 15
+
+    while (runningCheck and runningCheck() or true) and attempt < maxAttempts do
+        attempt += 1
+        print(string.format("🔄 Switching character (Attempt %d/%d) to '%s'", attempt, maxAttempts, targetChar))
+        notify(string.format("Switching to %s (%d/%d)...", targetChar, attempt, maxAttempts))
+
+        -- 1. สั่งเปิดหน้าเลือกตัวละคร (Menu / CharacterSelect)
+        pcall(function()
+            local inp = getInput()
+            if inp then
+                inp:FireServer("Menu")
+                task.wait(0.05)
+                inp:FireServer("CharacterSelect")
+            end
+        end)
+
+        -- 2. สั่ง Reset เลือด 0 และยิง Loaded เพื่อให้เกมเข้าสู่สถานะ Respawn / Menu
+        pcall(function()
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                hum.Health = 0
+            end
+            local loaded = ReplicatedStorage:FindFirstChild("Loaded")
+            if loaded then
+                loaded:FireServer()
+            end
+        end)
+
+        -- 3. สแปมส่ง Remote เปลี่ยนตัวละครพร้อม Delay 0.25s
+        local cycleDeadline = os.clock() + 7
+        while (runningCheck and runningCheck() or true) and os.clock() < cycleDeadline do
+            -- ส่งผ่าน Backpack.ServerTraits.Choose
+            pcall(function()
+                local bp = LocalPlayer:FindFirstChild("Backpack")
+                local st = bp and bp:FindFirstChild("ServerTraits")
+                local ch = st and st:FindFirstChild("Choose")
+                if ch then
+                    ch:FireServer(targetChar)
+                    task.wait(0.05)
+                    ch:FireServer("PLAY")
+                end
+            end)
+
+            -- ส่งผ่าน Input Remote
+            pcall(function()
+                local inp = getInput()
+                if inp then
+                    inp:FireServer("CharacterButton", targetChar)
+                    task.wait(0.05)
+                    inp:FireServer("ClickPlay")
+                end
+            end)
+
+            -- กดยืนยัน Respawn Done ถ้ามี GUI
+            pcall(function()
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local r = pg and pg:FindFirstChild("Respawning")
+                if r and r:FindFirstChild("Done") then
+                    r.Done:FireServer()
+                end
+            end)
+
+            -- ตรวจสอบว่าเกิดใหม่และเป็นตัวละครที่ถูกต้องหรือยัง
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if char and hum and hum.Health > 0 then
+                if isCharacterMatching(targetChar) then
+                    print("🎉 Character successfully switched to: " .. targetChar)
+                    notify("Switched to " .. targetChar .. " successfully!")
+                    task.wait(0.8)
+                    return true
+                end
+            end
+
+            task.wait(0.25) -- Delay 0.25 วินาที เพื่อป้องกันบัคและไม่ให้เกมแลค
         end
-        local loaded = ReplicatedStorage:FindFirstChild("Loaded")
-        if loaded then
-            loaded:FireServer()
-        end
-    end)
 
-    -- รอเกิดใหม่
-    LocalPlayer.CharacterAdded:Wait()
-    task.wait(1.5)
+        task.wait(0.5)
+    end
 
-    -- กดยืนยัน Respawn Done (เหมือนในไฟล์ที่ 2)
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local r = pg and pg:FindFirstChild("Respawning")
-        if r and r:FindFirstChild("Done") then
-            r.Done:FireServer()
-        end
-    end)
-
-    -- ส่ง Remote ยืนยันรอบที่สองหลังเกิด
-    fireCharacterSelect(charName)
-    task.wait(0.5)
-    notify("Character set: " .. charName)
+    return isCharacterMatching(targetChar)
 end
 
 local runId = 0
@@ -411,11 +520,7 @@ local function v12()
             print(string.format("🎯 Target Loaded | Mode: %s | Target: %d | Character: '%s'", s1, n2, s2))
             notify("Quest loaded: " .. s1 .. " | Target: " .. n2)
 
-            -- ทำการสลับตัวละครตามที่ Quest กำหนด
-            if s2 and s2 ~= "" and running() then
-                switchCharacterWithReset(s2)
-            end
-
+            -- ตรวจสอบผู้เล่น ถ้ามีไม่ถึง 2 คน ให้รอและวาปเข้า VIP
             if #Players:GetPlayers() < t1.REQUIRED_PLAYERS and running() then
                 notify(string.format("Waiting for %d players... (%ds before VIP)", t1.REQUIRED_PLAYERS, t1.PRIVATE_SERVER_DELAY))
                 local waitElapsed = 0
@@ -429,7 +534,21 @@ local function v12()
                 end
             end
 
+            -- ตรวจสอบเมื่อมีผู้เล่นครบ >= 2 คนขึ้นไป
             if v86 and #Players:GetPlayers() >= t1.REQUIRED_PLAYERS and running() then
+                
+                -- ตรวจสอบและสลับตัวละครให้ตรงกับเควสต์ก่อนเริ่มสู้
+                if s2 and s2 ~= "" and running() then
+                    if not isCharacterMatching(s2) then
+                        ensureCharacter(s2, running)
+                    else
+                        print("✅ Current character already matches quest: " .. s2)
+                    end
+                end
+
+                if not running() then return end
+
+                -- เริ่มระบบตรวจสอบ Leaderstats
                 task.spawn(function()
                     local leaderstats = LocalPlayer:WaitForChild("leaderstats", 10)
                     local u117 = (leaderstats and leaderstats:FindFirstChild("Kills") and tonumber(leaderstats.Kills.Value)) or 0
@@ -489,6 +608,7 @@ local function v12()
                     respawnConnection:Disconnect()
                 end)
 
+                -- เริ่มระบบ Combat Loop
                 task.spawn(function()
                     print("⚔️ Combat Loop ACTIVE for mode: " .. s1)
 
