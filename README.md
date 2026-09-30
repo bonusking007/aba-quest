@@ -1,12 +1,14 @@
 -- ==========================================
--- Version: V.8.7.7 - ABA Quest Farm (Instant Fast-Spawn & Instant Combat)
+-- 📌 Version: V.8.7.8 - ABA Quest Farm (Added Misc Tab & Auto Prestige)
 -- ==========================================
 
 -- ==========================================
--- User Whitelist Check
+-- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
 -- ==========================================
 local ALLOWED_USERS = {
-    "Bunowaiau359"
+    "Bunowaiau359",
+    "Krobsans906",
+    "Sodermaae3535"
 }
 
 local Players = game:GetService("Players")
@@ -31,7 +33,7 @@ if not isAuthorized then
 end
 
 -- ==========================================
--- Script Farm Logic
+-- 🚀 Script Farm Logic (เริ่มทำงานเมื่อผ่านการตรวจสอบ)
 -- ==========================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -39,13 +41,13 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
 
--- ล้างค่า flag ใน getgenv
+-- ล้างค่า flag ใน getgenv เพื่อไม่ให้ค้างข้ามเซิฟบนมือถือ
 if getgenv then
     getgenv()._ABA_Currently_In_PS = nil
 end
 
 -- ==========================================
--- Auto Execute on Hop / Teleport
+-- 🔄 Auto Execute on Hop / Teleport
 -- ==========================================
 local function setupAutoExecuteOnHop()
     local queue = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
@@ -104,6 +106,7 @@ local t1 = {
 	AUTO_TP_PLAYERS = true,
 	MAIN_TP_INTERVAL = 0.2,
 	MAIN_TP_DISTANCE = 3,
+	AUTO_PRESTIGE = true, -- Auto Prestige (เวล 100 อัตโนมัติ) เปิดเป็นค่าเริ่มต้น
 	ENGINE_ENABLED = false,
 	AUTO_HIDE_UI = true,
 	TOGGLE_UI_KEY = "L",
@@ -124,7 +127,7 @@ pcall(function()
                     t1[k] = v
                 end
             end
-            print("⚙ Configuration successfully loaded from workspace!")
+            print("⚙️ Configuration successfully loaded from workspace!")
         end
     end
 end)
@@ -146,7 +149,96 @@ local function notify(message)
 end
 
 -- ==========================================
--- Fast Character Switch & Skip Respawn Timer
+-- 🌟 ระบบ Auto Prestige (Mr Random / GLOOPYTOWN)
+-- ==========================================
+local function getPlayerLevel()
+    local char = LocalPlayer.Character
+    local paths = {
+        LocalPlayer:FindFirstChild("Level"),
+        LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild("Level"),
+        char and char:FindFirstChild("Level"),
+        char and char:FindFirstChild("Stats") and char.Stats:FindFirstChild("Level")
+    }
+    for _, v in ipairs(paths) do
+        if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then
+            return tonumber(v.Value)
+        end
+    end
+
+    for _, root in ipairs({LocalPlayer, char}) do
+        if root then
+            for _, v in ipairs(root:GetDescendants()) do
+                if v.Name == "Level" and (v:IsA("IntValue") or v:IsA("NumberValue")) then
+                    return tonumber(v.Value)
+                end
+            end
+        end
+    end
+
+    -- ตรวจจับจาก Text บน HUD เพิ่มเติม
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    local hud = pg and pg:FindFirstChild("HUD")
+    local lo = hud and hud:FindFirstChild("RightBotCorner") and hud.RightBotCorner:FindFirstChild("Line2") and hud.RightBotCorner.Line2:FindFirstChild("Lvl")
+    if lo and (lo:IsA("TextLabel") or lo:IsA("TextBox")) then
+        local num = tonumber(lo.Text:match("%d+"))
+        if num then return num end
+    end
+
+    return nil
+end
+
+local function doPrestige()
+    local folder = workspace:FindFirstChild("FriendlyNPCs")
+    local npc = folder and folder:FindFirstChild("Mr Random")
+    if not npc then
+        warn("[Prestige] Mr Random not found in FriendlyNPCs")
+        return false
+    end
+
+    local prestigeEvent = nil
+    for _, v in ipairs(npc:GetDescendants()) do
+        if v:IsA("StringValue") and v.Name == "ChatEvent" and v.Value == "GLOOPYTOWN" then
+            prestigeEvent = v
+            break
+        end
+    end
+
+    if not prestigeEvent then
+        warn("[Prestige] GLOOPYTOWN event not found")
+        return false
+    end
+
+    local chatEventLocal = ReplicatedStorage:FindFirstChild("ChatEventLocal")
+    if chatEventLocal then
+        chatEventLocal:FireServer(prestigeEvent)
+        print("🌟 [Prestige] Successfully fired GLOOPYTOWN ChatEvent!")
+        notify("🌟 Auto Prestige activated via Mr Random!")
+        return true
+    end
+
+    return false
+end
+
+-- ลูปเช็คเลเวลเพื่อกด Prestige เบื้องหลัง
+task.spawn(function()
+    local prestigeFired = false
+    while true do
+        task.wait(1.5)
+        if t1.AUTO_PRESTIGE then
+            local lvl = getPlayerLevel()
+            if lvl and lvl >= 100 then
+                if not prestigeFired then
+                    prestigeFired = doPrestige()
+                end
+            else
+                prestigeFired = false
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- 🛠️ ฟังก์ชัน Fast Character Switch
 -- ==========================================
 local function getInput()
     local bp = LocalPlayer:FindFirstChild("Backpack")
@@ -241,7 +333,7 @@ local function switchCharacterFast(targetChar)
     -- 2. เปิดโหมด AFK ชั่วคราว
     toggleAFK()
 
-    -- 3. สแปมส่งคำสั่งเลือกตัวละครเพียง 0.8 วินาที (สั้นและไม่ทำให้แลค)
+    -- 3. สแปมส่งคำสั่งเลือกตัวละครเพียง 0.8 วินาที
     local spamDeadline = os.clock() + 0.8
     while os.clock() < spamDeadline do
         fireSelectRemote(targetChar)
@@ -252,10 +344,10 @@ local function switchCharacterFast(targetChar)
     toggleAFK()
     task.wait(0.1)
 
-    -- 5. สั่งยืนยันเล่น
+    -- 5. ยืนยันเล่น
     fireSelectRemote(targetChar)
 
-    -- 6. ลูปรอเกิดแบบ Fast-Forward (ยิง Done ทันทีเพื่อข้ามเวลานับถอยหลัง 5-10 วิ)
+    -- 6. ลูปรอเกิดแบบ Fast-Forward ข้ามเวลานับถอยหลัง
     local spawnDeadline = os.clock() + 6
     while os.clock() < spawnDeadline do
         pcall(function()
@@ -272,7 +364,6 @@ local function switchCharacterFast(targetChar)
         local hum = char and char:FindFirstChildOfClass("Humanoid")
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if char and hum and hrp and hum.Health > 0 then
-            -- ปลด ForceField ทันทีเมื่อเกิดเสร็จ
             pcall(function()
                 local inp = getInput()
                 if inp then inp:FireServer("ForceFieldOff") end
@@ -495,7 +586,7 @@ local function v12()
 
             if v86 and #Players:GetPlayers() >= t1.REQUIRED_PLAYERS and running() then
                 
-                -- สลับตัวละครแบบเร่งด่วน ข้ามเวลารอ
+                -- สลับตัวละครแบบ Fast
                 if s2 and s2 ~= "" and running() then
                     switchCharacterFast(s2)
                 end
@@ -788,6 +879,7 @@ local v19 = result:CreateWindow({
 
 local v20 = v19:Tab({ Title = "Main Setup", Icon = "home" })
 local v21 = v19:Tab({ Title = "Combat Settings", Icon = "sword" })
+local v22 = v19:Tab({ Title = "Misc", Icon = "sparkles" }) -- เพิ่ม Tab Misc
 
 local function saveConfig()
     pcall(function()
@@ -985,6 +1077,19 @@ v21:Toggle({
 	Value = t1.SKILL_4,
 	Callback = function(p19)
         t1.SKILL_4 = p19
+        saveConfig()
+    end
+})
+
+-- ==========================================
+-- 🌟 Controls ในแท็บ Misc
+-- ==========================================
+v22:Toggle({
+    Title = "Auto Prestige (Lv. 100)",
+    Desc = "Automatically Prestiges via Mr Random when reaching Level 100",
+    Value = t1.AUTO_PRESTIGE,
+    Callback = function(val)
+        t1.AUTO_PRESTIGE = val
         saveConfig()
     end
 })
