@@ -7,8 +7,6 @@
 -- ==========================================
 local ALLOWED_USERS = {
     "Bunowaiau359", -- ไอดีหลัก[cite: 2]
-    "Krobsans906",   -- ไอดีรอง (Alt)[cite: 2]
-    "Sodermaae3535"  -- ไอดีรอง (Alt)[cite: 2]
 }
 
 local Players = game:GetService("Players")
