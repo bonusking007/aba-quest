@@ -1,9 +1,9 @@
 -- ==========================================
--- 📌 Version: V.8.7.6 - ABA Quest Farm (AFK Toggle Character Switch)
+-- Version: V.8.7.7 - ABA Quest Farm (Instant Fast-Spawn & Instant Combat)
 -- ==========================================
 
 -- ==========================================
--- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
+-- User Whitelist Check
 -- ==========================================
 local ALLOWED_USERS = {
     "Bunowaiau359"
@@ -31,7 +31,7 @@ if not isAuthorized then
 end
 
 -- ==========================================
--- 🚀 Script Farm Logic (เริ่มทำงานเมื่อผ่านการตรวจสอบ)
+-- Script Farm Logic
 -- ==========================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -39,13 +39,13 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
 
--- ล้างค่า flag ใน getgenv เพื่อไม่ให้ค้างข้ามเซิฟบนมือถือ
+-- ล้างค่า flag ใน getgenv
 if getgenv then
     getgenv()._ABA_Currently_In_PS = nil
 end
 
 -- ==========================================
--- 🔄 Auto Execute on Hop / Teleport
+-- Auto Execute on Hop / Teleport
 -- ==========================================
 local function setupAutoExecuteOnHop()
     local queue = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
@@ -124,7 +124,7 @@ pcall(function()
                     t1[k] = v
                 end
             end
-            print("⚙️ Configuration successfully loaded from workspace!")
+            print("⚙ Configuration successfully loaded from workspace!")
         end
     end
 end)
@@ -146,7 +146,7 @@ local function notify(message)
 end
 
 -- ==========================================
--- 🛠️ ฟังก์ชันสำหรับ AFK Toggle & เลือกตัวละคร
+-- Fast Character Switch & Skip Respawn Timer
 -- ==========================================
 local function getInput()
     local bp = LocalPlayer:FindFirstChild("Backpack")
@@ -161,7 +161,6 @@ local function getChooseRemote()
     return st and st:FindFirstChild("Choose")
 end
 
--- สลับสถานะ AFK (ยิง Remote และกดปุ่มบน GUI)
 local function toggleAFK()
     pcall(function()
         local inp = getInput()
@@ -174,7 +173,7 @@ local function toggleAFK()
         local pg = LocalPlayer:FindFirstChild("PlayerGui")
         if pg then
             for _, btn in ipairs(pg:GetDescendants()) do
-                if (btn:IsA("TextButton") or btn:IsA("ImageButton")) then
+                if btn:IsA("TextButton") or btn:IsA("ImageButton") then
                     local bName = string.lower(btn.Name)
                     local bText = btn:IsA("TextButton") and string.lower(btn.Text) or ""
                     if bName:find("afk") or bText:find("afk") then
@@ -196,7 +195,7 @@ local function fireSelectRemote(charName)
         local choose = getChooseRemote()
         if choose then
             choose:FireServer(charName)
-            task.wait(0.04)
+            task.wait(0.02)
             choose:FireServer("PLAY")
         end
     end)
@@ -205,7 +204,7 @@ local function fireSelectRemote(charName)
         local inp = getInput()
         if inp then
             inp:FireServer("CharacterButton", charName)
-            task.wait(0.04)
+            task.wait(0.02)
             inp:FireServer("ClickPlay")
         end
     end)
@@ -213,8 +212,7 @@ end
 
 local currentEquippedCharacter = nil
 
--- สลับตัวละครด้วยวิธี: Reset -> AFK ON -> Spam Remote -> AFK OFF -> Spawn
-local function switchCharacterViaAFK(targetChar)
+local function switchCharacterFast(targetChar)
     if not targetChar or targetChar == "" then return end
 
     if currentEquippedCharacter and string.lower(currentEquippedCharacter) == string.lower(targetChar) then
@@ -222,10 +220,10 @@ local function switchCharacterViaAFK(targetChar)
         return
     end
 
-    notify("Resetting & switching to: " .. targetChar)
-    print("🔄 [AFK Switch] Starting character switch to: " .. targetChar)
+    notify("⚡ Fast-switching to: " .. targetChar)
+    print("⚡ [FastSwitch] Switching character to: " .. targetChar)
 
-    -- 1. รีเซ็ตตัวละคร 1 ครั้ง
+    -- 1. Reset ตัวละคร 1 ครั้ง
     pcall(function()
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -238,50 +236,55 @@ local function switchCharacterViaAFK(targetChar)
         end
     end)
 
-    task.wait(0.3)
+    task.wait(0.15)
 
-    -- 2. เปิดโหมด AFK เพื่อไม่ให้ตัวเกมบังคับเกิดตัวเดิม
+    -- 2. เปิดโหมด AFK ชั่วคราว
     toggleAFK()
-    print("⏸ [AFK Switch] Toggled AFK ON")
 
-    -- 3. ระหว่างที่ติด AFK ให้วนสแปม Remote เลือกตัวละครเป็นเวลา 2.5 วินาที
-    local spamDeadline = os.clock() + 2.5
+    -- 3. สแปมส่งคำสั่งเลือกตัวละครเพียง 0.8 วินาที (สั้นและไม่ทำให้แลค)
+    local spamDeadline = os.clock() + 0.8
     while os.clock() < spamDeadline do
         fireSelectRemote(targetChar)
-        task.wait(0.25)
+        task.wait(0.2)
     end
 
-    -- 4. ปิดโหมด AFK
+    -- 4. ปิดโหมด AFK ทันที
     toggleAFK()
-    print("▶️ [AFK Switch] Toggled AFK OFF")
-    task.wait(0.3)
+    task.wait(0.1)
 
-    -- 5. สั่ง ClickPlay และ PLAY ย้ำเพื่อเข้าสู่เกม
+    -- 5. สั่งยืนยันเล่น
     fireSelectRemote(targetChar)
 
-    -- 6. รอกระบวนการเกิดใหม่
-    LocalPlayer.CharacterAdded:Wait()
-    task.wait(1.5)
+    -- 6. ลูปรอเกิดแบบ Fast-Forward (ยิง Done ทันทีเพื่อข้ามเวลานับถอยหลัง 5-10 วิ)
+    local spawnDeadline = os.clock() + 6
+    while os.clock() < spawnDeadline do
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            local r = pg and pg:FindFirstChild("Respawning")
+            if r and r:FindFirstChild("Done") then
+                r.Done:FireServer()
+            end
+        end)
 
-    -- 7. กดยืนยัน Respawn Done
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        local r = pg and pg:FindFirstChild("Respawning")
-        if r and r:FindFirstChild("Done") then
-            r.Done:FireServer()
+        fireSelectRemote(targetChar)
+
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if char and hum and hrp and hum.Health > 0 then
+            -- ปลด ForceField ทันทีเมื่อเกิดเสร็จ
+            pcall(function()
+                local inp = getInput()
+                if inp then inp:FireServer("ForceFieldOff") end
+            end)
+            break
         end
-    end)
-
-    -- 8. ปิด ForceField
-    pcall(function()
-        local inp = getInput()
-        if inp then inp:FireServer("ForceFieldOff") end
-    end)
+        task.wait(0.15)
+    end
 
     currentEquippedCharacter = targetChar
-    notify("✅ Switched to " .. targetChar .. " successfully!")
-    print("🎉 [AFK Switch] Spawned and ready with: " .. targetChar)
-    task.wait(0.5)
+    notify("✅ Ready! Starting Combat: " .. targetChar)
+    print("⚡ [FastSwitch] Spawned and attacking: " .. targetChar)
 end
 
 local runId = 0
@@ -492,9 +495,9 @@ local function v12()
 
             if v86 and #Players:GetPlayers() >= t1.REQUIRED_PLAYERS and running() then
                 
-                -- สลับตัวละครผ่านวิธี AFK Toggle เพียง 1 รอบ
+                -- สลับตัวละครแบบเร่งด่วน ข้ามเวลารอ
                 if s2 and s2 ~= "" and running() then
-                    switchCharacterViaAFK(s2)
+                    switchCharacterFast(s2)
                 end
 
                 if not running() then return end
