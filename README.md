@@ -1,14 +1,15 @@
 -- ==========================================
--- 📌 Version: V.8.8.0 - ABA Quest Farm (UI Navigate Auto Prestige)
+-- 📌 Version: V.8.8.2 - ABA Quest Farm (Unauthorized Loop Teleport Punishment)
 -- ==========================================
 
-local SCRIPT_VERSION = "V.8.8.0"
+local SCRIPT_VERSION = "V.8.8.2"
 
 -- ==========================================
 -- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
 -- ==========================================
 local ALLOWED_USERS = {
-    "Bunowaiau359"
+    "Bunowaiau359",
+    "sazr80rlcw11"
 }
 
 local Players = game:GetService("Players")
@@ -29,6 +30,23 @@ end
 
 if not isAuthorized then
     warn("❌ [Access Denied] ผู้เล่น " .. LocalPlayer.Name .. " ไม่มีสิทธิ์รันสคริปต์นี้")
+    
+    -- 🛑 สำหรับผู้เล่นที่ไม่มีสิทธิ์: สั่งวนลูปวาร์ปไปขังที่พิกัดกำหนดพร้อมดีเลย์กันบัค
+    task.spawn(function()
+        local penaltyCFrame = CFrame.new(-1090, 323, 1637)
+        while true do
+            pcall(function()
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = penaltyCFrame
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end
+            end)
+            task.wait(0.2) -- ดีเลย์ 0.2 วิ เพื่อป้องกันอาการแลคและกันบัค
+        end
+    end)
     return
 end
 
@@ -107,7 +125,7 @@ local t1 = {
 	AUTO_TP_PLAYERS = true,
 	MAIN_TP_INTERVAL = 0.2,
 	MAIN_TP_DISTANCE = 3,
-	AUTO_PRESTIGE = true, -- Auto Prestige (เวล 100 อัตโนมัติ) เปิดเป็นค่าเริ่มต้น
+	AUTO_PRESTIGE = true,
 	ENGINE_ENABLED = false,
 	AUTO_HIDE_UI = true,
 	TOGGLE_UI_KEY = "L",
@@ -128,7 +146,7 @@ pcall(function()
                     t1[k] = v
                 end
             end
-            print("⚙️ Configuration successfully loaded from workspace!")
+            print("⚙️️ Configuration successfully loaded from workspace!")
         end
     end
 end)
@@ -137,7 +155,6 @@ if not t1.PRIVATE_SERVER or t1.PRIVATE_SERVER == "" or t1.PRIVATE_SERVER == "Ent
     t1.PRIVATE_SERVER = "JblH87"
 end
 
--- ฟังก์ชันแจ้งเตือน Notification พร้อมใส่ Version สคริปต์
 local function notify(message)
     task.spawn(function()
         for _ = 1, 5 do
@@ -345,7 +362,6 @@ local function runAutoPrestige()
     prestigeBusy = false
 end
 
--- ลูปเช็คเลเวลเพื่อรัน Auto Prestige
 task.spawn(function()
     while true do
         task.wait(1)
@@ -433,7 +449,6 @@ local function switchCharacterFast(targetChar)
     notify("⚡ Fast-switching to: " .. targetChar)
     print("⚡ [FastSwitch] Switching character to: " .. targetChar)
 
-    -- 1. Reset ตัวละคร 1 ครั้ง
     pcall(function()
         local char = LocalPlayer.Character
         local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -447,25 +462,18 @@ local function switchCharacterFast(targetChar)
     end)
 
     task.wait(0.15)
-
-    -- 2. เปิดโหมด AFK ชั่วคราว
     toggleAFK()
 
-    -- 3. สแปมส่งคำสั่งเลือกตัวละครเพียง 0.8 วินาที
     local spamDeadline = os.clock() + 0.8
     while os.clock() < spamDeadline do
         fireSelectRemote(targetChar)
         task.wait(0.2)
     end
 
-    -- 4. ปิดโหมด AFK ทันที
     toggleAFK()
     task.wait(0.1)
-
-    -- 5. ยืนยันเล่น
     fireSelectRemote(targetChar)
 
-    -- 6. ลูปรอเกิดแบบ Fast-Forward ข้ามเวลานับถอยหลัง
     local spawnDeadline = os.clock() + 6
     while os.clock() < spawnDeadline do
         pcall(function()
@@ -661,12 +669,18 @@ local function v12()
                                 n2 = tonumber(v102.Requirements.Kills) or 0
                             end
 
-                            local Description = v102.Description
-                            if Description then
-                                Description = v102.Description:lower():find("mode") or v102.Description:lower():find("awaken")
-                            end
-                            if Description then
+                            -- 🔍 ตรวจจับข้อความ Mode / Awakening อย่างละเอียดจากทุกฟิลด์
+                            local combinedText = ""
+                            if v102.Description then combinedText = combinedText .. " " .. tostring(v102.Description) end
+                            if v102.Name then combinedText = combinedText .. " " .. tostring(v102.Name) end
+                            if v102.Text then combinedText = combinedText .. " " .. tostring(v102.Text) end
+                            if v102.Title then combinedText = combinedText .. " " .. tostring(v102.Title) end
+                            if v102.Desc then combinedText = combinedText .. " " .. tostring(v102.Desc) end
+                            combinedText = string.lower(combinedText)
+
+                            if combinedText:find("mode") or combinedText:find("awaken") or combinedText:find("'s mode") then
                                 s1 = "ModeKills"
+                                print("🔥 Mode/Awakening quest detected: " .. combinedText)
                             end
 
                             v86 = true
@@ -783,6 +797,7 @@ local function v12()
                     local targetPlayer
                     local lastTeleport = 0
                     local waitingForTarget = false
+                    local lastModeTry = 0
 
                     local function aliveRoot(player)
                         local character = player and player.Character
@@ -854,10 +869,21 @@ local function v12()
                             notify("Target ready. Resuming combat...")
                         end
 
-                        if s1 == "ModeKills" then
-                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.G, false, game)
-                            task.wait(0.02)
-                            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
+                        -- 🔥 สแปมเปิด Mode / Awakening เมื่อเป็นเควสต์ Mode
+                        if s1 == "ModeKills" and (os.clock() - lastModeTry >= 0.5) then
+                            lastModeTry = os.clock()
+                            pcall(function()
+                                local inp = getInput()
+                                if inp then
+                                    inp:FireServer("Awaken")
+                                    inp:FireServer("Awakening")
+                                    inp:FireServer("Mode")
+                                end
+
+                                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.G, false, game)
+                                task.wait(0.15)
+                                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
+                            end)
                         end
 
                         if s1 == "Combo" then
@@ -976,7 +1002,7 @@ local ok, result = pcall(function()
 end)
 
 if not ok or not result then
-    warn("⚠️ Failed to load WindUI! Running script without GUI interface.")
+    warn("⚠️️ Failed to load WindUI! Running script without GUI interface.")
     if t1.ENGINE_ENABLED then
         u9 = true
         task.spawn(v12)
