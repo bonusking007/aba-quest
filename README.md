@@ -9,7 +9,9 @@ local SCRIPT_VERSION = "V.8.8.2"
 -- ==========================================
 local ALLOWED_USERS = {
     "Bunowaiau359",
-    "sazr80rlcw11"
+    "sazr80rlcw11",
+	"LunarWolf97808h",
+	"LunarPanda33768u"
 }
 
 local Players = game:GetService("Players")
