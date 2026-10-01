@@ -1,6 +1,8 @@
 -- ==========================================
--- 📌 Version: V.8.7.8 - ABA Quest Farm (Added Misc Tab & Auto Prestige)
+-- 📌 Version: V.8.8.0 - ABA Quest Farm (UI Navigate Auto Prestige)
 -- ==========================================
+
+local SCRIPT_VERSION = "V.8.8.0"
 
 -- ==========================================
 -- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
@@ -35,6 +37,7 @@ end
 -- ==========================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
@@ -134,11 +137,16 @@ if not t1.PRIVATE_SERVER or t1.PRIVATE_SERVER == "" or t1.PRIVATE_SERVER == "Ent
     t1.PRIVATE_SERVER = "JblH87"
 end
 
+-- ฟังก์ชันแจ้งเตือน Notification พร้อมใส่ Version สคริปต์
 local function notify(message)
     task.spawn(function()
         for _ = 1, 5 do
             local ok = pcall(function()
-                StarterGui:SetCore("SendNotification", {Title = "ABA Quest Farm", Text = message, Duration = 4})
+                StarterGui:SetCore("SendNotification", {
+                    Title = "ABA Quest Farm " .. SCRIPT_VERSION,
+                    Text = message,
+                    Duration = 4
+                })
             end)
             if ok then return end
             task.wait(0.3)
@@ -147,33 +155,28 @@ local function notify(message)
 end
 
 -- ==========================================
--- 🌟 ระบบ Auto Prestige (Mr Random / GLOOPYTOWN)
+-- 🌟 ระบบ Auto Prestige (UI Navigation + Mr Random)
 -- ==========================================
+local prestigeBusy = false
+local prestigeLastTry = 0
+
 local function getPlayerLevel()
+    local a = LocalPlayer:GetAttribute("Level")
+    if tonumber(a) then return tonumber(a) end
+
     local char = LocalPlayer.Character
-    local paths = {
-        LocalPlayer:FindFirstChild("Level"),
-        LocalPlayer:FindFirstChild("leaderstats") and LocalPlayer.leaderstats:FindFirstChild("Level"),
-        char and char:FindFirstChild("Level"),
-        char and char:FindFirstChild("Stats") and char.Stats:FindFirstChild("Level")
-    }
-    for _, v in ipairs(paths) do
-        if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then
-            return tonumber(v.Value)
+    local roots = {LocalPlayer, LocalPlayer:FindFirstChild("leaderstats"), char, char and char:FindFirstChild("Stats")}
+    for _, r in ipairs(roots) do
+        if r then
+            local v = r:FindFirstChild("Level")
+            if v and (v:IsA("IntValue") or v:IsA("NumberValue")) then return tonumber(v.Value) end
         end
     end
 
-    for _, root in ipairs({LocalPlayer, char}) do
-        if root then
-            for _, v in ipairs(root:GetDescendants()) do
-                if v.Name == "Level" and (v:IsA("IntValue") or v:IsA("NumberValue")) then
-                    return tonumber(v.Value)
-                end
-            end
-        end
+    for _, v in ipairs(LocalPlayer:GetDescendants()) do
+        if v.Name == "Level" and (v:IsA("IntValue") or v:IsA("NumberValue")) then return tonumber(v.Value) end
     end
 
-    -- ตรวจจับจาก Text บน HUD เพิ่มเติม
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     local hud = pg and pg:FindFirstChild("HUD")
     local lo = hud and hud:FindFirstChild("RightBotCorner") and hud.RightBotCorner:FindFirstChild("Line2") and hud.RightBotCorner.Line2:FindFirstChild("Lvl")
@@ -185,52 +188,169 @@ local function getPlayerLevel()
     return nil
 end
 
-local function doPrestige()
-    local folder = workspace:FindFirstChild("FriendlyNPCs")
-    local npc = folder and folder:FindFirstChild("Mr Random")
-    if not npc then
-        warn("[Prestige] Mr Random not found in FriendlyNPCs")
-        return false
+local function visibleButton(v)
+    if not v:IsA("GuiButton") or not v.Visible then return false end
+    local p = v.Parent
+    while p and p ~= LocalPlayer.PlayerGui do
+        if p:IsA("GuiObject") and not p.Visible then return false end
+        if p:IsA("ScreenGui") and not p.Enabled then return false end
+        p = p.Parent
     end
+    return v.AbsoluteSize.X > 30 and v.AbsoluteSize.Y > 30
+end
 
-    local prestigeEvent = nil
-    for _, v in ipairs(npc:GetDescendants()) do
-        if v:IsA("StringValue") and v.Name == "ChatEvent" and v.Value == "GLOOPYTOWN" then
-            prestigeEvent = v
-            break
+local function snapshotButtons()
+    local t = {}
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        for _, v in ipairs(pg:GetDescendants()) do
+            if v:IsA("GuiButton") then t[v] = visibleButton(v) end
+        end
+    end
+    return t
+end
+
+local function findFirstNewChoice(before)
+    local list = {}
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+
+    for _, v in ipairs(pg:GetDescendants()) do
+        if v:IsA("GuiButton") and visibleButton(v) and not before[v] then
+            local n = string.lower(v.Name)
+            local txt = v:IsA("TextButton") and string.lower(v.Text or "") or ""
+            if n ~= "close" and n ~= "exit" and n ~= "back" and n ~= "cancel" and n ~= "finish"
+                and txt ~= "close" and txt ~= "exit" and txt ~= "back" and txt ~= "cancel" and txt ~= "finish" then
+                table.insert(list, v)
+            end
         end
     end
 
-    if not prestigeEvent then
-        warn("[Prestige] GLOOPYTOWN event not found")
-        return false
+    if #list < 3 then return nil end
+    table.sort(list, function(a, b)
+        if math.abs(a.AbsolutePosition.Y - b.AbsolutePosition.Y) > 20 then
+            return a.AbsolutePosition.Y < b.AbsolutePosition.Y
+        end
+        return a.AbsolutePosition.X < b.AbsolutePosition.X
+    end)
+    return list[1]
+end
+
+local function activatePrestigeButton(btn)
+    if not btn then return false end
+    print("[AutoPrestige] Selecting:", btn:GetFullName())
+
+    if typeof(firesignal) == "function" then
+        local ok = pcall(function() firesignal(btn.Activated) end)
+        if ok then return true end
     end
 
-    local chatEventLocal = ReplicatedStorage:FindFirstChild("ChatEventLocal")
-    if chatEventLocal then
-        chatEventLocal:FireServer(prestigeEvent)
-        print("🌟 [Prestige] Successfully fired GLOOPYTOWN ChatEvent!")
-        notify("🌟 Auto Prestige activated via Mr Random!")
-        return true
+    pcall(function()
+        GuiService.GuiNavigationEnabled = true
+        GuiService.SelectedObject = btn
+    end)
+
+    local ok = pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+    end)
+    if ok then return true end
+
+    if typeof(keypress) == "function" and typeof(keyrelease) == "function" then
+        return pcall(function()
+            keypress(0x0D)
+            task.wait(0.05)
+            keyrelease(0x0D)
+        end)
     end
 
     return false
 end
 
--- ลูปเช็คเลเวลเพื่อกด Prestige เบื้องหลัง
-task.spawn(function()
-    local prestigeFired = false
-    while true do
-        task.wait(1.5)
-        if t1.AUTO_PRESTIGE then
-            local lvl = getPlayerLevel()
-            if lvl and lvl >= 100 then
-                if not prestigeFired then
-                    prestigeFired = doPrestige()
+local function runAutoPrestige()
+    if prestigeBusy or (os.clock() - prestigeLastTry < 5) then return end
+    local level = getPlayerLevel()
+    if not level or level < 100 then return end
+
+    prestigeBusy = true
+    prestigeLastTry = os.clock()
+    print("[AutoPrestige] Level " .. tostring(level) .. " reached. Starting prestige...")
+    notify("Level 100 reached! Auto Prestiging...")
+
+    local before = snapshotButtons()
+    local fired = false
+
+    pcall(function()
+        local npc = workspace:FindFirstChild("FriendlyNPCs") and workspace.FriendlyNPCs:FindFirstChild("Mr Random")
+        if npc then
+            local ev = npc:FindFirstChild("Chat")
+            ev = ev and ev:FindFirstChild("Chat")
+            ev = ev and ev:FindFirstChild("Chat")
+            ev = ev and ev:FindFirstChild("Choice")
+            ev = ev and ev:FindFirstChild("Yes")
+            ev = ev and ev:FindFirstChild("ChatEvent")
+
+            if not ev then
+                for _, v in ipairs(npc:GetDescendants()) do
+                    if v:IsA("StringValue") and v.Name == "ChatEvent" and (v.Value == "GLOOPYTOWN" or (v.Parent and v.Parent.Name == "Yes")) then
+                        ev = v
+                        break
+                    end
                 end
-            else
-                prestigeFired = false
             end
+
+            if ev then
+                ReplicatedStorage.ChatEventLocal:FireServer(ev)
+                fired = true
+                print("[AutoPrestige] Fired ChatEvent to Mr Random")
+            end
+        end
+    end)
+
+    if not fired then
+        warn("[AutoPrestige] Mr Random ChatEvent failed to fire")
+        prestigeBusy = false
+        return
+    end
+
+    local btn
+    local started = os.clock()
+    repeat
+        task.wait(0.1)
+        btn = findFirstNewChoice(before)
+    until btn or not t1.AUTO_PRESTIGE or (os.clock() - started > 10)
+
+    if btn then
+        if activatePrestigeButton(btn) then
+            print("[AutoPrestige] First prestige choice selected via UI Navigation")
+            notify("Prestige choice selected!")
+        else
+            print("[AutoPrestige] Could not activate first choice button")
+        end
+    else
+        print("[AutoPrestige] Prestige choice UI not found (Timeout)")
+    end
+
+    local waitStart = os.clock()
+    repeat
+        task.wait(0.25)
+        local lv = getPlayerLevel()
+        if lv and lv < 100 then
+            notify("🎉 Prestige Complete! Level reset.")
+            break
+        end
+    until not t1.AUTO_PRESTIGE or (os.clock() - waitStart > 12)
+
+    prestigeBusy = false
+end
+
+-- ลูปเช็คเลเวลเพื่อรัน Auto Prestige
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if t1.AUTO_PRESTIGE then
+            runAutoPrestige()
         end
     end
 end)
@@ -865,7 +985,7 @@ if not ok or not result then
 end
 
 local v19 = result:CreateWindow({
-	Title = "ABA Auto Quest Farm",
+	Title = "ABA Auto Quest Farm " .. SCRIPT_VERSION,
 	Icon = "swords",
 	Author = "Standalone",
 	Folder = "ABAQuestFarm",
@@ -877,7 +997,7 @@ local v19 = result:CreateWindow({
 
 local v20 = v19:Tab({ Title = "Main Setup", Icon = "home" })
 local v21 = v19:Tab({ Title = "Combat Settings", Icon = "sword" })
-local v22 = v19:Tab({ Title = "Misc", Icon = "sparkles" }) -- เพิ่ม Tab Misc
+local v22 = v19:Tab({ Title = "Misc", Icon = "sparkles" })
 
 local function saveConfig()
     pcall(function()
@@ -1084,7 +1204,7 @@ v21:Toggle({
 -- ==========================================
 v22:Toggle({
     Title = "Auto Prestige (Lv. 100)",
-    Desc = "Automatically Prestiges via Mr Random when reaching Level 100",
+    Desc = "Automatically Prestiges via UI Navigation when reaching Level 100",
     Value = t1.AUTO_PRESTIGE,
     Callback = function(val)
         t1.AUTO_PRESTIGE = val
