@@ -1,14 +1,15 @@
 -- ==========================================
--- 📌 Version: V.8.8.2 - ABA Quest Farm (Unauthorized Loop Teleport Punishment)
+-- Version: V.8.8.11 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
 -- ==========================================
 
-local SCRIPT_VERSION = "V.8.8.2"
+local SCRIPT_VERSION = "V.8.8.11"
 
 -- ==========================================
--- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
+-- User Whitelist Check
 -- ==========================================
 local ALLOWED_USERS = {
-    "Bunowaiau359"
+    "Bunowaiau359",
+    "LunarBear91801y"
 }
 
 local Players = game:GetService("Players")
@@ -30,7 +31,6 @@ end
 if not isAuthorized then
     warn("❌ [Access Denied] ผู้เล่น " .. LocalPlayer.Name .. " ไม่มีสิทธิ์รันสคริปต์นี้")
     
-    -- 🛑 สำหรับผู้เล่นที่ไม่มีสิทธิ์: สั่งวนลูปวาร์ปไปขังที่พิกัดกำหนดพร้อมดีเลย์กันบัค
     task.spawn(function()
         local penaltyCFrame = CFrame.new(-1090, 323, 1637)
         while true do
@@ -43,14 +43,14 @@ if not isAuthorized then
                     hrp.AssemblyAngularVelocity = Vector3.zero
                 end
             end)
-            task.wait(0.2) -- ดีเลย์ 0.2 วิ เพื่อป้องกันอาการแลคและกันบัค
+            task.wait(0.2)
         end
     end)
     return
 end
 
 -- ==========================================
--- 🚀 Script Farm Logic (เริ่มทำงานเมื่อผ่านการตรวจสอบ)
+-- Script Farm Logic
 -- ==========================================
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -59,13 +59,12 @@ local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
 
--- ล้างค่า flag ใน getgenv เพื่อไม่ให้ค้างข้ามเซิฟบนมือถือ
 if getgenv then
     getgenv()._ABA_Currently_In_PS = nil
 end
 
 -- ==========================================
--- 🔄 Auto Execute on Hop / Teleport
+-- Auto Execute on Hop / Teleport
 -- ==========================================
 local function setupAutoExecuteOnHop()
     local queue = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
@@ -75,6 +74,8 @@ local function setupAutoExecuteOnHop()
         repeat task.wait() until game:IsLoaded()
         task.wait(1)
         local candidates = {
+            "ABA_QuestFarm_Mobile_ServerGuard.lua",
+            "ABA_QuestFarm_Mobile_CharacterFix.lua",
             "ABA_QuestFarm_TP_Notify.lua",
             "abaquestfarm.lua",
             "abaquestfarm/main.lua"
@@ -107,7 +108,7 @@ local t1 = {
 	GLITCH_QUEST_1 = 1,
 	GLITCH_QUEST_2 = 2,
 	REQUIRED_PLAYERS = 2,
-	TP_DELAY = 3,
+	TP_DELAY = 0,
 	PRIVATE_SERVER = "JblH87",
 	PRIVATE_SERVER_DELAY = 3,
 	M1_CLICK_DELAY = 0.2,
@@ -145,7 +146,7 @@ pcall(function()
                     t1[k] = v
                 end
             end
-            print("⚙️️ Configuration successfully loaded from workspace!")
+            print("⚙ Configuration successfully loaded from workspace!")
         end
     end
 end)
@@ -168,6 +169,103 @@ local function notify(message)
             task.wait(0.3)
         end
     end)
+end
+
+-- ==========================================
+-- 🔍 ระบบดึงชื่อตัวละคร & ข้อมูลเควสต์
+-- ==========================================
+local CHARACTER_ALIASES = {} -- ["Quest name"] = "Exact character button name"
+local function cleanCharacterName(value)
+    local text = tostring(value or ""):gsub("<[^>]+>", "")
+    return (text:gsub("%s+", " "):gsub("^%s*(.-)%s*$", "%1"))
+end
+local function characterKey(value)
+    return cleanCharacterName(value):lower():gsub("[^%w]", "")
+end
+local function parseCharacterName(text)
+    text = cleanCharacterName(text)
+    if text == "" then return "" end
+    text = text:gsub("%s*%-%s*%d+%s*/%s*%d+.*$", "")
+        :gsub("%s*%d+%s*/%s*%d+%s*$", "")
+    local lower = text:lower()
+    local _, finish = lower:find("%f[%a]with%s+")
+    local name
+    if finish then
+        name = text:sub(finish + 1)
+    else
+        local _, inEnd = lower:find("%f[%a]in%s+")
+        if inEnd then
+            local candidate = text:sub(inEnd + 1)
+            local possessive = candidate:lower():find("'s%s+mode")
+            if possessive then name = candidate:sub(1, possessive - 1) end
+        end
+    end
+    if not name then return "" end
+    name = name:gsub("[%.!]+$", ""):gsub("[’']s%s+[Mm][Oo][Dd][Ee].*$", "")
+    return cleanCharacterName(name)
+end
+local function getQuestCharacter(dailyQuest, slot)
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(tostring(dailyQuest.Value or ""))
+    end)
+    local quest = ok and type(data) == "table" and data[slot]
+    if type(quest) ~= "table" then return "" end
+    local requirements = quest.Requirements
+    if type(requirements) == "table" and type(requirements.Character) == "string" then
+        local name = cleanCharacterName(requirements.Character)
+        if name ~= "" then return name end
+    end
+    for _, field in ipairs({"Description", "Name", "Text", "Title", "Desc"}) do
+        local name = parseCharacterName(quest[field])
+        if name ~= "" then return name end
+    end
+    return ""
+end
+
+local function getScreenQuestData()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+
+    for _, v in ipairs(pg:GetDescendants()) do
+        if v:IsA("TextLabel") and v.Text and v.Text ~= "" then
+            local text = v.Text
+            local cur, total = text:match("%-%s*(%d+)%s*/%s*(%d+)")
+            if not total then
+                cur, total = text:match("(%d+)%s*/%s*(%d+)")
+            end
+
+            if cur and total then
+                local c = tonumber(cur)
+                local t = tonumber(total)
+                local lower = text:lower()
+
+                if t and t > 0 and (lower:find("kill") or lower:find("damage") or lower:find("point") or lower:find("combo") or lower:find("mode") or lower:find("quest") or lower:find("get ")) then
+                    local isMode = lower:find("mode") or lower:find("awaken")
+                    local reqType = "Kills"
+                    if isMode then
+                        reqType = "ModeKills"
+                    elseif lower:find("damage") or lower:find("deal") then
+                        reqType = "Damage"
+                    elseif lower:find("point") then
+                        reqType = "Points"
+                    elseif lower:find("combo") then
+                        reqType = "Combo"
+                    end
+
+                    local detectedChar = parseCharacterName(text)
+
+                    return {
+                        Current = c,
+                        Target = t,
+                        Type = reqType,
+                        Character = detectedChar,
+                        RawText = text
+                    }
+                end
+            end
+        end
+    end
+    return nil
 end
 
 -- ==========================================
@@ -413,94 +511,106 @@ local function toggleAFK()
     end)
 end
 
-local function fireSelectRemote(charName)
-    if not charName or charName == "" then return end
-
-    pcall(function()
-        local choose = getChooseRemote()
-        if choose then
-            choose:FireServer(charName)
-            task.wait(0.02)
-            choose:FireServer("PLAY")
+local function resolveCharacterName(name)
+    name = cleanCharacterName(name)
+    if CHARACTER_ALIASES[name] then return CHARACTER_ALIASES[name] end
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        for _, button in ipairs(pg:GetDescendants()) do
+            if button:IsA("TextButton") or button:IsA("ImageButton") then
+                for _, value in ipairs({button.Name, button:GetAttribute("CharacterName") or "", button:IsA("TextButton") and button.Text or ""}) do
+                    if value ~= "" and characterKey(value) == characterKey(name) then
+                        return cleanCharacterName(value)
+                    end
+                end
+            end
         end
-    end)
-
-    pcall(function()
-        local inp = getInput()
-        if inp then
-            inp:FireServer("CharacterButton", charName)
-            task.wait(0.02)
-            inp:FireServer("ClickPlay")
+    end
+    return name
+end
+local function readEquippedCharacter()
+    local char = LocalPlayer.Character
+    for _, container in ipairs({char or false, LocalPlayer:FindFirstChild("ReplicatedStats") or false, LocalPlayer}) do
+        if container then
+            for _, field in ipairs({"CharacterName", "CurrentCharacter", "EquippedCharacter"}) do
+                local attribute = container:GetAttribute(field)
+                if type(attribute) == "string" and attribute ~= "" then return attribute end
+                local value = container:FindFirstChild(field)
+                if value and value:IsA("StringValue") and value.Value ~= "" then return value.Value end
+            end
+        end
+    end
+end
+local function fireSelectRemote(charName)
+    local remote = getInput()
+    local useInput = remote ~= nil
+    remote = remote or getChooseRemote()
+    if not remote then return false end
+    return pcall(function()
+        if useInput then
+            remote:FireServer("CharacterButton", charName)
+            task.wait(0.15)
+            remote = getInput()
+            if not remote then error("Input disappeared before Play") end
+            remote:FireServer("ClickPlay")
+        else
+            remote:FireServer(charName)
+            task.wait(0.15)
+            remote = getChooseRemote()
+            if not remote then error("Choose disappeared before Play") end
+            remote:FireServer("PLAY")
         end
     end)
 end
-
-local currentEquippedCharacter = nil
-
-local function switchCharacterFast(targetChar)
-    if not targetChar or targetChar == "" then return end
-
-    if currentEquippedCharacter and string.lower(currentEquippedCharacter) == string.lower(targetChar) then
-        print("✅ Current character already active: " .. targetChar)
-        return
+local function switchCharacterFast(targetChar, running)
+    targetChar = resolveCharacterName(targetChar)
+    if targetChar == "" then return true end
+    running = running or function() return true end
+    local equipped = readEquippedCharacter()
+    local current = LocalPlayer.Character
+    local hum = current and current:FindFirstChildOfClass("Humanoid")
+    if equipped and characterKey(equipped) == characterKey(targetChar) and hum and hum.Health > 0 then
+        notify("Character confirmed: " .. equipped)
+        return true
     end
-
-    notify("⚡ Fast-switching to: " .. targetChar)
-    print("⚡ [FastSwitch] Switching character to: " .. targetChar)
-
-    pcall(function()
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health > 0 then
-            hum.Health = 0
-        end
-        local loaded = ReplicatedStorage:FindFirstChild("Loaded")
-        if loaded then
-            loaded:FireServer()
-        end
-    end)
-
-    task.wait(0.15)
-    toggleAFK()
-
-    local spamDeadline = os.clock() + 0.8
-    while os.clock() < spamDeadline do
-        fireSelectRemote(targetChar)
-        task.wait(0.2)
-    end
-
-    toggleAFK()
-    task.wait(0.1)
-    fireSelectRemote(targetChar)
-
-    local spawnDeadline = os.clock() + 6
-    while os.clock() < spawnDeadline do
+    for attempt = 1, 3 do
+        if not running() then return false end
+        notify("Selecting " .. targetChar .. " (" .. attempt .. "/3)")
+        local previous = LocalPlayer.Character
         pcall(function()
-            local pg = LocalPlayer:FindFirstChild("PlayerGui")
-            local r = pg and pg:FindFirstChild("Respawning")
-            if r and r:FindFirstChild("Done") then
-                r.Done:FireServer()
-            end
+            local humanoid = previous and previous:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then humanoid.Health = 0 end
+            local loaded = ReplicatedStorage:FindFirstChild("Loaded")
+            if loaded then loaded:FireServer() end
         end)
-
-        fireSelectRemote(targetChar)
-
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if char and hum and hrp and hum.Health > 0 then
+        local sent, deadline = false, os.clock() + 10
+        while running() and os.clock() < deadline do
+            local ok = fireSelectRemote(targetChar)
+            sent = sent or ok
             pcall(function()
-                local inp = getInput()
-                if inp then inp:FireServer("ForceFieldOff") end
+                local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                local respawning = pg and pg:FindFirstChild("Respawning")
+                local done = respawning and respawning:FindFirstChild("Done")
+                if done then done:FireServer() end
             end)
-            break
+            local character = LocalPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            equipped = readEquippedCharacter()
+            local identityMatches = equipped and characterKey(equipped) == characterKey(targetChar)
+            if sent and character ~= previous and humanoid and root and humanoid.Health > 0 then
+                if identityMatches or not equipped then
+                    notify(identityMatches and ("Character confirmed: " .. equipped) or ("Respawned after selecting " .. targetChar .. "; character identity unavailable."))
+                    return true
+                end
+                warn("Character mismatch: requested " .. targetChar .. ", observed " .. tostring(equipped))
+                break
+            end
+            task.wait(0.35)
         end
-        task.wait(0.15)
     end
-
-    currentEquippedCharacter = targetChar
-    notify("✅ Ready! Starting Combat: " .. targetChar)
-    print("⚡ [FastSwitch] Spawned and attacking: " .. targetChar)
+    notify("Character switch failed: " .. targetChar .. ". Farming paused; stop and retry.")
+    return false
 end
 
 local runId = 0
@@ -543,15 +653,72 @@ local function u11(p2)
     return tostring(p2)
 end
 
+local function isABAVIPServer()
+    local overrides = ReplicatedStorage:FindFirstChild("VipTeamOverrides")
+    local vipPlayers = overrides and overrides:FindFirstChild("Players")
+    if vipPlayers and #vipPlayers:GetChildren() > 0 then return true end
+    local ok, privateId = pcall(function() return game.PrivateServerId end)
+    return ok and type(privateId) == "string" and privateId ~= ""
+end
+local function isTrainingNPC(instance)
+    if not instance:IsA("Model") or Players:GetPlayerFromCharacter(instance) then return false end
+    if not instance:FindFirstChildOfClass("Humanoid") then return false end
+    local name = instance.Name:lower():gsub("[^%w]", "")
+    return name == "testdummy" or name == "trainingdummy" or name == "yamcha"
+end
+local function hasTrainingNPC()
+    for _, instance in ipairs(workspace:GetDescendants()) do
+        if isTrainingNPC(instance) then return true end
+    end
+    return false
+end
+local function ensureMainFarmServer(running)
+    notify("Checking server: VIP / Training...")
+    local deadline = os.clock() + 10
+    repeat
+        if not running() then return false end
+        if isABAVIPServer() then
+            notify("VIP confirmed. Starting quest farm...")
+            return true
+        end
+        if hasTrainingNPC() then
+            notify("Training NPC detected. Starting quest farm...")
+            return true
+        end
+        task.wait(0.5)
+    until os.clock() >= deadline
+    if not running() then return false end
+    notify("Public server detected. Returning to Training before farming...")
+    local remote = ReplicatedStorage:WaitForChild("Train", 10)
+    if not running() then return false end
+    if not remote or not remote:IsA("RemoteEvent") then
+        notify("Training remote unavailable. Farming paused.")
+        return false
+    end
+    if isABAVIPServer() or hasTrainingNPC() then return true end
+    local ok, err = pcall(function() remote:FireServer() end)
+    if not ok then
+        warn("Training request failed: " .. tostring(err))
+        notify("Training request failed. Farming paused.")
+        return false
+    end
+    local transferDeadline = os.clock() + 15
+    while running() and os.clock() < transferDeadline do
+        if isABAVIPServer() or hasTrainingNPC() then
+            notify("Farm server detected. Continuing...")
+            return true
+        end
+        task.wait(0.5)
+    end
+    if running() then notify("Waiting for Training transfer. Farming paused; restart Engine if transfer failed.") end
+    return false
+end
+
 local function v12()
     runId += 1
     local currentRun = runId
     local function running()
         return u9 and runId == currentRun
-    end
-    local function v10(seconds)
-        local deadline = os.clock() + seconds
-        while running() and os.clock() < deadline do task.wait(0.1) end
     end
 
     local v51 = t1.MAIN_USERNAME == ""
@@ -576,6 +743,8 @@ local function v12()
             if not running() then
                 return
             end
+
+            if not ensureMainFarmServer(running) then return end
 
             local QuestStuff = ReplicatedStorage:WaitForChild("QuestStuff", 999)
             local ReplicatedStats = LocalPlayer:WaitForChild("ReplicatedStats", 10)
@@ -617,75 +786,101 @@ local function v12()
                         QuestStuff:FireServer("Take", v93)
                         task.wait(0.05)
                     end
-                    task.wait(0.1)
+                    task.wait(0.5)
                 end
 
                 if not running() then
                     return
                 end
 
+                local oldQuestString = tostring(v85.Value or "")
+
                 notify("Taking quest " .. v91 .. " (attempt " .. n3 .. ")")
                 QuestStuff:FireServer("Take", v91)
                 task.wait(0.4)
                 QuestStuff:FireServer("Close")
 
-                local s3 = ""
                 for _ = 1, 25 do
-                    if not running() then
-                        return
+                    if not running() then return end
+                    local gq = getScreenQuestData()
+                    if gq and gq.Target and gq.Target > 0 then
+                        s1 = gq.Type
+                        n2 = gq.Target
+                        if gq.Character and gq.Character ~= "" then
+                            s2 = gq.Character
+                        end
+                        v86 = true
+                        print(string.format("🎯 GUI Quest Detected Real-Time: Mode=%s | Target=%d | Character='%s'", s1, n2, s2))
+                        break
                     end
-                    local Value = v85.Value
-                    if Value then
-                        Value = v85.Value ~= ""
-                    end
-                    if Value then
-                        s3 = tostring(v85.Value)
+
+                    if tostring(v85.Value or "") ~= oldQuestString and tostring(v85.Value or "") ~= "" then
                         break
                     end
                     task.wait(0.1)
                 end
 
-                if s3 ~= "" then
-                    local ok, result = pcall(function()
-                        return HttpService:JSONDecode(s3)
-                    end)
+                if not v86 then
+                    local s3 = tostring(v85.Value or "")
+                    if s3 ~= "" then
+                        local ok, result = pcall(function()
+                            return HttpService:JSONDecode(s3)
+                        end)
 
-                    if ok and type(result) == "table" then
-                        local v102 = result[v91]
-                        if v102 and v102.Requirements then
-                            s2 = v102.Requirements.Character or ""
-                            if v102.Requirements.Combo then
-                                s1 = "Combo"
-                                n2 = tonumber(v102.Requirements.Combo) or 0
-                            elseif v102.Requirements.Damage then
-                                s1 = "Damage"
-                                n2 = tonumber(v102.Requirements.Damage) or 0
-                            elseif v102.Requirements.Points then
-                                s1 = "Points"
-                                n2 = tonumber(v102.Requirements.Points) or 0
-                            elseif v102.Requirements.Kills then
-                                s1 = "Kills"
-                                n2 = tonumber(v102.Requirements.Kills) or 0
+                        if ok and type(result) == "table" then
+                            local v102 = result[v91]
+                            if v102 and v102.Requirements then
+                                if not s2 or s2 == "" then
+                                    s2 = v102.Requirements.Character or ""
+                                end
+
+                                if v102.Requirements.Combo then
+                                    s1 = "Combo"
+                                    n2 = tonumber(v102.Requirements.Combo) or 0
+                                elseif v102.Requirements.Damage then
+                                    s1 = "Damage"
+                                    n2 = tonumber(v102.Requirements.Damage) or 0
+                                elseif v102.Requirements.Points then
+                                    s1 = "Points"
+                                    n2 = tonumber(v102.Requirements.Points) or 0
+                                elseif v102.Requirements.Kills then
+                                    s1 = "Kills"
+                                    n2 = tonumber(v102.Requirements.Kills) or 0
+                                end
+
+                                local combinedText = ""
+                                if v102.Description then combinedText = combinedText .. " " .. tostring(v102.Description) end
+                                if v102.Name then combinedText = combinedText .. " " .. tostring(v102.Name) end
+                                if v102.Text then combinedText = combinedText .. " " .. tostring(v102.Text) end
+                                if v102.Title then combinedText = combinedText .. " " .. tostring(v102.Title) end
+                                if v102.Desc then combinedText = combinedText .. " " .. tostring(v102.Desc) end
+                                combinedText = string.lower(combinedText)
+
+                                if combinedText:find("mode") or combinedText:find("awaken") or combinedText:find("'s mode") then
+                                    s1 = "ModeKills"
+                                end
+
+                                if not s2 or s2 == "" then
+                                    s2 = parseCharacterName(combinedText)
+                                end
+
+                                v86 = true
                             end
-
-                            -- 🔍 ตรวจจับข้อความ Mode / Awakening อย่างละเอียดจากทุกฟิลด์
-                            local combinedText = ""
-                            if v102.Description then combinedText = combinedText .. " " .. tostring(v102.Description) end
-                            if v102.Name then combinedText = combinedText .. " " .. tostring(v102.Name) end
-                            if v102.Text then combinedText = combinedText .. " " .. tostring(v102.Text) end
-                            if v102.Title then combinedText = combinedText .. " " .. tostring(v102.Title) end
-                            if v102.Desc then combinedText = combinedText .. " " .. tostring(v102.Desc) end
-                            combinedText = string.lower(combinedText)
-
-                            if combinedText:find("mode") or combinedText:find("awaken") or combinedText:find("'s mode") then
-                                s1 = "ModeKills"
-                                print("🔥 Mode/Awakening quest detected: " .. combinedText)
-                            end
-
-                            v86 = true
                         end
                     end
                 end
+
+                local gqFinal = getScreenQuestData()
+                if gqFinal and gqFinal.Target and gqFinal.Target > 0 then
+                    s1 = gqFinal.Type
+                    n2 = gqFinal.Target
+                    if gqFinal.Character and gqFinal.Character ~= "" then
+                        s2 = gqFinal.Character
+                    end
+                    v86 = true
+                end
+                local authoritativeCharacter = getQuestCharacter(v85, v91)
+                if authoritativeCharacter ~= "" then s2 = authoritativeCharacter end
 
                 if not v86 then
                     print("⚠️ Quest data sync delayed, retrying... (Attempt " .. n3 .. "/5)")
@@ -700,7 +895,7 @@ local function v12()
             end
 
             print(string.format("🎯 Target Loaded | Mode: %s | Target: %d | Character: '%s'", s1, n2, s2))
-            notify("Quest loaded: " .. s1 .. " | Target: " .. n2)
+            notify(string.format("Quest: %s (%s) | Target: %d", s2, s1, n2))
 
             if #Players:GetPlayers() < t1.REQUIRED_PLAYERS and running() then
                 notify(string.format("Waiting for %d players... (%ds before VIP)", t1.REQUIRED_PLAYERS, t1.PRIVATE_SERVER_DELAY))
@@ -717,72 +912,127 @@ local function v12()
 
             if v86 and #Players:GetPlayers() >= t1.REQUIRED_PLAYERS and running() then
                 
-                -- สลับตัวละครแบบ Fast
                 if s2 and s2 ~= "" and running() then
-                    switchCharacterFast(s2)
+                    if not switchCharacterFast(s2, running) then return end
                 end
 
                 if not running() then return end
 
+                local gqSpawn = getScreenQuestData()
+                if gqSpawn and gqSpawn.Target and gqSpawn.Target > 0 then
+                    s1 = gqSpawn.Type
+                    n2 = gqSpawn.Target
+                    local updatedCharacter = getQuestCharacter(v85, v91)
+                    if updatedCharacter == "" then updatedCharacter = gqSpawn.Character or "" end
+                    if updatedCharacter ~= "" and characterKey(updatedCharacter) ~= characterKey(s2) then
+                        s2 = updatedCharacter
+                        if not switchCharacterFast(s2, running) then return end
+                    end
+                    print(string.format("🔄 Post-Spawn Target Confirmed: Character=%s | Mode=%s | Target=%d", s2, s1, n2))
+                end
+
+                -- 🌟 ระบบตรวจเช็คจบเควสต์ (Vanish Detection + Overkill Safety Cap)
                 task.spawn(function()
                     local leaderstats = LocalPlayer:WaitForChild("leaderstats", 10)
-                    local u117 = (leaderstats and leaderstats:FindFirstChild("Kills") and tonumber(leaderstats.Kills.Value)) or 0
-                    local v120 = (leaderstats and leaderstats:FindFirstChild("Damage") and tonumber(leaderstats.Damage.Value)) or 0
-                    local v121 = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
-                    local v123 = (s1 == "Kills" or s1 == "ModeKills")
-                    local u124 = u117 + (v123 and n2 or 0)
-                    local v125 = v120 + (s1 == "Damage" and n2 or 0)
-                    local v128 = v121 + ((s1 == "Points" and n2) or 0)
+                    local baseKills = (leaderstats and leaderstats:FindFirstChild("Kills") and tonumber(leaderstats.Kills.Value)) or 0
+                    local baseDamage = (leaderstats and leaderstats:FindFirstChild("Damage") and tonumber(leaderstats.Damage.Value)) or 0
+                    local basePoints = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
 
-                    local respawnConnection = LocalPlayer.CharacterAdded:Connect(function()
-                        if not u87 and leaderstats and running() then
-                            task.wait(0.5)
-                            local Kills = leaderstats:FindFirstChild("Kills")
-                            u117 = (Kills and tonumber(Kills.Value)) or 0
-                            u124 = u117 + ((s1 == "Kills" or s1 == "ModeKills") and n2 or 0)
-                        end
-                    end)
+                    local hadSeenActiveGui = false
+                    local lastSeenCurrent = 0
+                    local lastSeenTarget = n2
+
+                    print(string.format("📊 Baseline set: Kills=%d, Target=%d", baseKills, n2))
 
                     while running() and not u87 do
-                        local v129 = false
-                        local leaderstats2 = LocalPlayer:FindFirstChild("leaderstats")
+                        task.wait(0.3)
 
-                        if leaderstats2 and n2 > 0 then
-                            if s1 == "Kills" or s1 == "ModeKills" then
-                                local Kills = leaderstats2:FindFirstChild("Kills")
-                                local v134 = (Kills and tonumber(Kills.Value)) or 0
-                                v129 = (u124 <= v134) and (v134 > u117)
-                            elseif s1 == "Damage" then
-                                local Damage = leaderstats2:FindFirstChild("Damage")
-                                local v136 = (Damage and tonumber(Damage.Value)) or 0
-                                v129 = (v125 <= v136) and (v120 < v136)
-                            elseif s1 == "Points" then
-                                local Points = leaderstats2:FindFirstChild("Points")
-                                local v138 = (Points and tonumber(Points.Value)) or 0
-                                v129 = (v128 <= v138) and (v121 < v138)
+                        local isDone = false
+                        local qData = getScreenQuestData()
+
+                        local curK = (leaderstats and leaderstats:FindFirstChild("Kills") and tonumber(leaderstats.Kills.Value)) or 0
+                        local curD = (leaderstats and leaderstats:FindFirstChild("Damage") and tonumber(leaderstats.Damage.Value)) or 0
+                        local curP = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
+                        local gainedK = curK - baseKills
+
+                        if qData then
+                            hadSeenActiveGui = true
+                            lastSeenCurrent = qData.Current
+                            lastSeenTarget = qData.Target
+                            if qData.Target > n2 then n2 = qData.Target end
+
+                            -- 1. ตัวเลขบนหน้าจอถึงเป้าหมายจริง ๆ (เช่น 15/15)
+                            if qData.Current >= qData.Target then
+                                isDone = true
+                                print(string.format("✅ [Screen Target Reached] %d/%d! Finishing quest.", qData.Current, qData.Target))
+                            end
+                        else
+                            -- 2. เควสต์บนจอหายไป (เมื่อทำครบแล้ว UI จะถูกลบออก)
+                            if hadSeenActiveGui and (lastSeenCurrent >= (lastSeenTarget - 2) or gainedK >= n2) then
+                                isDone = true
+                                print("✅ [Quest Completed & Vanished] Quest GUI disappeared after meeting criteria!")
                             end
                         end
 
-                        if v129 and not u87 then
-                            u87 = true
-                            print("✅ Quest goal achieved via Leaderstats!")
-                            notify("Target reached. Combat stopped; waiting to return...")
-                            v10((math.max(0, 1 + t1.TP_DELAY)))
+                        -- 3. Safety Fallback (ระบบสำรองป้องกันฟาร์มค้างไม่รู้จบ)
+                        if not isDone and n2 > 0 then
+                            if s1 == "Kills" and gainedK >= n2 then
+                                isDone = true
+                            elseif s1 == "Damage" and (curD - baseDamage) >= n2 then
+                                isDone = true
+                            elseif s1 == "Points" and (curP - basePoints) >= n2 then
+                                isDone = true
+                            -- สำหรับ ModeKills ถ้าฆ่าเกินเป้าหมายไป 3 ตัว (เช่น เควสต์ 15 แต่ฆ่าไป 18) ให้ตัดจบทันที ป้องกันทะลุเป็นพันตัว
+                            elseif s1 == "ModeKills" and gainedK >= (n2 + 3) then
+                                isDone = true
+                                print(string.format("⚠️ [Safety Cap Triggered] Mode kills exceeded target (Gained %d >= %d)! Force ending.", gainedK, n2 + 3))
+                            end
+                        end
 
-                            if running() then
-                                local Train = ReplicatedStorage:WaitForChild("Train", 10)
-                                if Train then
-                                    notify("Returning to Training...")
-                                    Train:FireServer()
+                        -- 4. ตรวจสอบจาก DailyQuest ใน ReplicatedStats อีกทาง
+                        if not isDone and v85 then
+                            local dqVal = tostring(v85.Value or "")
+                            if dqVal == "" or dqVal == "{}" or dqVal:lower():find("completed") then
+                                if gainedK >= n2 or hadSeenActiveGui then
+                                    isDone = true
+                                    print("✅ [DailyQuest Cleared] ReplicatedStats shows quest completed/cleared!")
                                 end
                             end
+                        end
+
+                        -- เมื่อทำเควสต์เสร็จ: หยุดตีทันที -> หน่วงเวลา 2.5 วินาทีรอ EXP -> แล้ววาร์ป
+                        if isDone and not u87 then
+                            u87 = true
+                            print("🎉 [Quest Complete] Combat stopped. Waiting 2.5s for EXP/Rewards to sync...")
+                            notify("🎯 Quest Complete! Waiting 2.5s for EXP...")
+
+                            pcall(function()
+                                local char = LocalPlayer.Character
+                                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                                if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+                            end)
+
+                            task.wait(2.5)
+
+                            print("🚀 Teleporting to Training now!")
+                            notify("Returning to Training...")
+
+                            task.spawn(function()
+                                local Train = ReplicatedStorage:WaitForChild("Train", 5) or ReplicatedStorage:FindFirstChild("Train")
+                                if Train then
+                                    for _ = 1, 10 do
+                                        if not running() then break end
+                                        pcall(function() Train:FireServer() end)
+                                        task.wait(0.3)
+                                    end
+                                end
+                            end)
                             break
                         end
-                        task.wait(0.2)
                     end
-                    respawnConnection:Disconnect()
                 end)
 
+                -- ⚔️ Combat Loop (จำกัดการวาร์ปตีคนละไม่เกิน 5 วินาที)
                 task.spawn(function()
                     print("⚔️ Combat Loop ACTIVE for mode: " .. s1)
 
@@ -793,7 +1043,8 @@ local function v12()
 						Enum.KeyCode.Four
 					}
                     notify("Farming started. M1: " .. tostring(t1.AUTO_M1) .. " | Skills: " .. tostring(t1.AUTO_SKILLS))
-                    local targetPlayer
+                    local targetPlayer = nil
+                    local targetStartTime = 0
                     local lastTeleport = 0
                     local waitingForTarget = false
                     local lastModeTry = 0
@@ -827,23 +1078,64 @@ local function v12()
                         if t1.AUTO_TP_PLAYERS then
                             local ownRoot = aliveRoot(LocalPlayer)
                             local targetRoot = targetPlayer and targetPlayer.Parent == Players and aliveRoot(targetPlayer)
-                            if not targetRoot and ownRoot then
-                                local closest = math.huge
+                            local isTargetExpired = (os.clock() - targetStartTime >= 5)
+
+                            if not targetRoot or isTargetExpired then
+                                local prevTarget = targetPlayer
                                 targetPlayer = nil
+                                targetRoot = nil
+
+                                local aliveCandidates = {}
                                 for _, player in ipairs(Players:GetPlayers()) do
                                     if player ~= LocalPlayer then
                                         local root = aliveRoot(player)
                                         if root then
-                                            local distance = (root.Position - ownRoot.Position).Magnitude
-                                            if distance < closest then
-                                                closest = distance
-                                                targetPlayer = player
-                                                targetRoot = root
-                                            end
+                                            table.insert(aliveCandidates, {Player = player, Root = root})
                                         end
                                     end
                                 end
-                                if targetPlayer then notify("Teleporting to: " .. targetPlayer.Name) end
+
+                                if #aliveCandidates > 0 then
+                                    local chosen = nil
+
+                                    if #aliveCandidates > 1 and prevTarget then
+                                        local otherCandidates = {}
+                                        for _, c in ipairs(aliveCandidates) do
+                                            if c.Player ~= prevTarget then
+                                                table.insert(otherCandidates, c)
+                                            end
+                                        end
+                                        if #otherCandidates > 0 then
+                                            local closest = math.huge
+                                            for _, c in ipairs(otherCandidates) do
+                                                local dist = (c.Root.Position - (ownRoot and ownRoot.Position or Vector3.zero)).Magnitude
+                                                if dist < closest then
+                                                    closest = dist
+                                                    chosen = c
+                                                end
+                                            end
+                                        end
+                                    end
+
+                                    if not chosen then
+                                        local closest = math.huge
+                                        for _, c in ipairs(aliveCandidates) do
+                                            local dist = (c.Root.Position - (ownRoot and ownRoot.Position or Vector3.zero)).Magnitude
+                                            if dist < closest then
+                                                closest = dist
+                                                chosen = c
+                                            end
+                                        end
+                                    end
+
+                                    if chosen then
+                                        targetPlayer = chosen.Player
+                                        targetRoot = chosen.Root
+                                        targetStartTime = os.clock()
+                                        notify("Target: " .. targetPlayer.Name .. " (Max 5s)")
+                                        print("🎯 Switched target to: " .. targetPlayer.Name .. " (Timer 5s)")
+                                    end
+                                end
                             end
 
                             if not ownRoot or not targetRoot then
@@ -855,6 +1147,11 @@ local function v12()
                                 continue
                             end
 
+                            if waitingForTarget then
+                                waitingForTarget = false
+                                notify("Target ready. Resuming combat...")
+                            end
+
                             if os.clock() - lastTeleport >= t1.MAIN_TP_INTERVAL then
                                 local position = (targetRoot.CFrame * CFrame.new(0, 0, t1.MAIN_TP_DISTANCE)).Position
                                 ownRoot.CFrame = CFrame.lookAt(position, targetRoot.Position)
@@ -863,12 +1160,6 @@ local function v12()
                             end
                         end
 
-                        if waitingForTarget then
-                            waitingForTarget = false
-                            notify("Target ready. Resuming combat...")
-                        end
-
-                        -- 🔥 สแปมเปิด Mode / Awakening เมื่อเป็นเควสต์ Mode
                         if s1 == "ModeKills" and (os.clock() - lastModeTry >= 0.5) then
                             lastModeTry = os.clock()
                             pcall(function()
@@ -891,21 +1182,21 @@ local function v12()
                             local v145 = (v144 and tonumber(v144.Value)) or 0
 
                             if v145 >= n2 then
-                                print("🛑 Combo target reached (" .. v145 .. "). Holding for drop...")
-                                notify("Combo target reached. Holding for 6 seconds...")
-                                v10(6)
-
-                                if not u87 and running() then
-                                    u87 = true
-                                    v10((math.max(0, 1 + t1.TP_DELAY)))
-                                    if not running() then return end
-                                    local Train = ReplicatedStorage:WaitForChild("Train", 10)
+                                print("🛑 Combo target reached (" .. v145 .. "). Stopping and waiting 2.5s for EXP...")
+                                notify("Combo target reached! Waiting 2.5s for EXP...")
+                                u87 = true
+                                task.wait(2.5)
+                                task.spawn(function()
+                                    local Train = ReplicatedStorage:WaitForChild("Train", 5) or ReplicatedStorage:FindFirstChild("Train")
                                     if Train then
-                                        notify("Returning to Training...")
-                                        Train:FireServer()
+                                        for _ = 1, 10 do
+                                            if not running() then break end
+                                            pcall(function() Train:FireServer() end)
+                                            task.wait(0.3)
+                                        end
                                     end
-                                    return
-                                end
+                                end)
+                                return
                             end
                         end
 
@@ -991,7 +1282,7 @@ local function v12()
                     v108.AssemblyLinearVelocity = Vector3.zero
                 end
             end
-            v10(t1.ALT_TP_INTERVAL)
+            task.wait(t1.ALT_TP_INTERVAL)
         end
     end)
 end
@@ -1225,7 +1516,7 @@ v21:Toggle({
 })
 
 -- ==========================================
--- 🌟 Controls ในแท็บ Misc
+-- Controls ในแท็บ Misc
 -- ==========================================
 v22:Toggle({
     Title = "Auto Prestige (Lv. 100)",
