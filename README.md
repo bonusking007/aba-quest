@@ -1,8 +1,8 @@
 -- ==========================================
--- Version: V.8.8.11 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
+-- Version: V.8.8.12 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
 -- ==========================================
 
-local SCRIPT_VERSION = "V.8.8.11"
+local SCRIPT_VERSION = "V.8.8.12"
 
 -- ==========================================
 -- User Whitelist Check
@@ -74,6 +74,7 @@ local function setupAutoExecuteOnHop()
         repeat task.wait() until game:IsLoaded()
         task.wait(1)
         local candidates = {
+            "ABA_QuestFarm_Mobile_ComboFix.lua",
             "ABA_QuestFarm_Mobile_ServerGuard.lua",
             "ABA_QuestFarm_Mobile_CharacterFix.lua",
             "ABA_QuestFarm_TP_Notify.lua",
@@ -222,6 +223,30 @@ local function getQuestCharacter(dailyQuest, slot)
     return ""
 end
 
+local function comboGoalFromText(text)
+    text = tostring(text or ""):lower():gsub("<[^>]+>", "")
+    local value = text:match("(%d+)%s*[%-%s]*hit%s+combo")
+        or text:match("(%d+)%s+combo")
+        or text:match("combo%s+of%s+(%d+)")
+        or text:match("combo%s*[:=]%s*(%d+)")
+    return tonumber(value)
+end
+local function getQuestComboGoal(dailyQuest, slot, screen)
+    local ok, data = pcall(function() return HttpService:JSONDecode(tostring(dailyQuest.Value or "")) end)
+    local quest = ok and type(data) == "table" and data[slot]
+    if type(quest) == "table" then
+        local req = quest.Requirements
+        local goal = type(req) == "table" and tonumber(req.Combo)
+        if goal and goal > 0 then return goal end
+        for _, field in ipairs({"Description", "Text", "Title", "Name", "Desc"}) do
+            goal = comboGoalFromText(quest[field])
+            if goal and goal > 0 then return goal end
+        end
+    end
+    local goal = screen and comboGoalFromText(screen.RawText)
+    if goal and goal > 0 then return goal end
+end
+
 local function getScreenQuestData()
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return nil end
@@ -242,7 +267,9 @@ local function getScreenQuestData()
                 if t and t > 0 and (lower:find("kill") or lower:find("damage") or lower:find("point") or lower:find("combo") or lower:find("mode") or lower:find("quest") or lower:find("get ")) then
                     local isMode = lower:find("mode") or lower:find("awaken")
                     local reqType = "Kills"
-                    if isMode then
+                    if lower:find("combo") then
+                        reqType = "Combo"
+                    elseif isMode then
                         reqType = "ModeKills"
                     elseif lower:find("damage") or lower:find("deal") then
                         reqType = "Damage"
@@ -894,6 +921,15 @@ local function v12()
                 return
             end
 
+            local actualComboGoal = getQuestComboGoal(v85, v91, getScreenQuestData())
+            if actualComboGoal then
+                s1 = "Combo"
+                n2 = actualComboGoal
+            elseif s1 == "Combo" then
+                notify("Cannot read required combo length. Farming paused; no automatic completion.")
+                return
+            end
+
             print(string.format("🎯 Target Loaded | Mode: %s | Target: %d | Character: '%s'", s1, n2, s2))
             notify(string.format("Quest: %s (%s) | Target: %d", s2, s1, n2))
 
@@ -920,8 +956,10 @@ local function v12()
 
                 local gqSpawn = getScreenQuestData()
                 if gqSpawn and gqSpawn.Target and gqSpawn.Target > 0 then
-                    s1 = gqSpawn.Type
-                    n2 = gqSpawn.Target
+                    if s1 ~= "Combo" then
+                        s1 = gqSpawn.Type
+                        n2 = gqSpawn.Target
+                    end
                     local updatedCharacter = getQuestCharacter(v85, v91)
                     if updatedCharacter == "" then updatedCharacter = gqSpawn.Character or "" end
                     if updatedCharacter ~= "" and characterKey(updatedCharacter) ~= characterKey(s2) then
@@ -938,66 +976,35 @@ local function v12()
                     local baseDamage = (leaderstats and leaderstats:FindFirstChild("Damage") and tonumber(leaderstats.Damage.Value)) or 0
                     local basePoints = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
 
-                    local hadSeenActiveGui = false
-                    local lastSeenCurrent = 0
-                    local lastSeenTarget = n2
-
-                    print(string.format("📊 Baseline set: Kills=%d, Target=%d", baseKills, n2))
-
+                    local peakCombo = 0
+                    local completionSamples = 0
+                    print(string.format("📊 Quest tracking: %s | Required: %d", s1, n2))
                     while running() and not u87 do
-                        task.wait(0.3)
-
+                        task.wait(0.1)
+                        if not running() or u87 then break end
                         local isDone = false
-                        local qData = getScreenQuestData()
-
-                        local curK = (leaderstats and leaderstats:FindFirstChild("Kills") and tonumber(leaderstats.Kills.Value)) or 0
-                        local curD = (leaderstats and leaderstats:FindFirstChild("Damage") and tonumber(leaderstats.Damage.Value)) or 0
-                        local curP = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
-                        local gainedK = curK - baseKills
-
-                        if qData then
-                            hadSeenActiveGui = true
-                            lastSeenCurrent = qData.Current
-                            lastSeenTarget = qData.Target
-                            if qData.Target > n2 then n2 = qData.Target end
-
-                            -- 1. ตัวเลขบนหน้าจอถึงเป้าหมายจริง ๆ (เช่น 15/15)
-                            if qData.Current >= qData.Target then
-                                isDone = true
-                                print(string.format("✅ [Screen Target Reached] %d/%d! Finishing quest.", qData.Current, qData.Target))
+                        if s1 == "Combo" then
+                            local stats = LocalPlayer:FindFirstChild("Stats")
+                            local combo = stats and stats:FindFirstChild("Combo")
+                            local current = combo and tonumber(combo.Value) or 0
+                            peakCombo = math.max(peakCombo, current)
+                            isDone = n2 > 0 and current >= n2
+                            if isDone then
+                                print(string.format("✅ Actual Combo reached: %d/%d", current, n2))
                             end
                         else
-                            -- 2. เควสต์บนจอหายไป (เมื่อทำครบแล้ว UI จะถูกลบออก)
-                            if hadSeenActiveGui and (lastSeenCurrent >= (lastSeenTarget - 2) or gainedK >= n2) then
-                                isDone = true
-                                print("✅ [Quest Completed & Vanished] Quest GUI disappeared after meeting criteria!")
+                            local qData = getScreenQuestData()
+                            local sameQuest = qData and qData.Type == s1 and qData.Target == n2
+                            if sameQuest and s2 ~= "" then
+                                sameQuest = qData.Character and qData.Character ~= ""
+                                    and characterKey(qData.Character) == characterKey(s2)
                             end
-                        end
-
-                        -- 3. Safety Fallback (ระบบสำรองป้องกันฟาร์มค้างไม่รู้จบ)
-                        if not isDone and n2 > 0 then
-                            if s1 == "Kills" and gainedK >= n2 then
-                                isDone = true
-                            elseif s1 == "Damage" and (curD - baseDamage) >= n2 then
-                                isDone = true
-                            elseif s1 == "Points" and (curP - basePoints) >= n2 then
-                                isDone = true
-                            -- สำหรับ ModeKills ถ้าฆ่าเกินเป้าหมายไป 3 ตัว (เช่น เควสต์ 15 แต่ฆ่าไป 18) ให้ตัดจบทันที ป้องกันทะลุเป็นพันตัว
-                            elseif s1 == "ModeKills" and gainedK >= (n2 + 3) then
-                                isDone = true
-                                print(string.format("⚠️ [Safety Cap Triggered] Mode kills exceeded target (Gained %d >= %d)! Force ending.", gainedK, n2 + 3))
+                            if sameQuest and n2 > 0 and qData.Current >= n2 then
+                                completionSamples += 1
+                            else
+                                completionSamples = 0
                             end
-                        end
-
-                        -- 4. ตรวจสอบจาก DailyQuest ใน ReplicatedStats อีกทาง
-                        if not isDone and v85 then
-                            local dqVal = tostring(v85.Value or "")
-                            if dqVal == "" or dqVal == "{}" or dqVal:lower():find("completed") then
-                                if gainedK >= n2 or hadSeenActiveGui then
-                                    isDone = true
-                                    print("✅ [DailyQuest Cleared] ReplicatedStats shows quest completed/cleared!")
-                                end
-                            end
+                            isDone = completionSamples >= 2
                         end
 
                         -- เมื่อทำเควสต์เสร็จ: หยุดตีทันที -> หน่วงเวลา 2.5 วินาทีรอ EXP -> แล้ววาร์ป
@@ -1174,30 +1181,6 @@ local function v12()
                                 task.wait(0.15)
                                 VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
                             end)
-                        end
-
-                        if s1 == "Combo" then
-                            local Stats = LocalPlayer:FindFirstChild("Stats")
-                            local v144 = Stats and Stats:FindFirstChild("Combo")
-                            local v145 = (v144 and tonumber(v144.Value)) or 0
-
-                            if v145 >= n2 then
-                                print("🛑 Combo target reached (" .. v145 .. "). Stopping and waiting 2.5s for EXP...")
-                                notify("Combo target reached! Waiting 2.5s for EXP...")
-                                u87 = true
-                                task.wait(2.5)
-                                task.spawn(function()
-                                    local Train = ReplicatedStorage:WaitForChild("Train", 5) or ReplicatedStorage:FindFirstChild("Train")
-                                    if Train then
-                                        for _ = 1, 10 do
-                                            if not running() then break end
-                                            pcall(function() Train:FireServer() end)
-                                            task.wait(0.3)
-                                        end
-                                    end
-                                end)
-                                return
-                            end
                         end
 
                         if not u87 and running() then
