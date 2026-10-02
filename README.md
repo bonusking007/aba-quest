@@ -8,8 +8,7 @@ local SCRIPT_VERSION = "V.8.8.2"
 -- 🔒 User Whitelist Check (เช็คชื่อก่อนรัน)
 -- ==========================================
 local ALLOWED_USERS = {
-    "Bunowaiau359",
-	"LunarPanda33768u"
+    "Bunowaiau359"
 }
 
 local Players = game:GetService("Players")
