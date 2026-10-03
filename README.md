@@ -8,7 +8,7 @@ local SCRIPT_VERSION = "V.8.8.15"
 -- User Whitelist Check
 -- ==========================================
 local ALLOWED_USERS = {
-    "teset",
+    "Bunowaiau359",
     "SwiftVolt64169e"
 }
 
