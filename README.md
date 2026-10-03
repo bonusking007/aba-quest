@@ -1,15 +1,15 @@
 -- ==========================================
--- Version: V.8.8.12 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
+-- Version: V.8.8.15 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
 -- ==========================================
 
-local SCRIPT_VERSION = "V.8.8.12"
+local SCRIPT_VERSION = "V.8.8.15"
 
 -- ==========================================
 -- User Whitelist Check
 -- ==========================================
 local ALLOWED_USERS = {
-    "TEST123",
-    "LunarBear91801y"
+    "Bunowaiau359",
+    "SwiftVolt64169e"
 }
 
 local Players = game:GetService("Players")
@@ -74,6 +74,9 @@ local function setupAutoExecuteOnHop()
         repeat task.wait() until game:IsLoaded()
         task.wait(1)
         local candidates = {
+            "ABA_QuestFarm_Mobile_CompletionFix.lua",
+            "ABA_QuestFarm_Mobile_KillFix.lua",
+            "ABA_QuestFarm_Mobile_AllQuests.lua",
             "ABA_QuestFarm_Mobile_ComboFix.lua",
             "ABA_QuestFarm_Mobile_ServerGuard.lua",
             "ABA_QuestFarm_Mobile_CharacterFix.lua",
@@ -188,6 +191,7 @@ local function parseCharacterName(text)
     if text == "" then return "" end
     text = text:gsub("%s*%-%s*%d+%s*/%s*%d+.*$", "")
         :gsub("%s*%d+%s*/%s*%d+%s*$", "")
+    text = text:gsub("’", "'")
     local lower = text:lower()
     local _, finish = lower:find("%f[%a]with%s+")
     local name
@@ -201,8 +205,14 @@ local function parseCharacterName(text)
             if possessive then name = candidate:sub(1, possessive - 1) end
         end
     end
+    if not name then
+        name = text:match("^([%w%s%(%)%-%_]+)'s%s+[Mm][Oo][Dd][Ee]")
+    end
     if not name then return "" end
     name = name:gsub("[%.!]+$", ""):gsub("[’']s%s+[Mm][Oo][Dd][Ee].*$", "")
+    local lowerName = name:lower()
+    local suffix = lowerName:find("%s+in%s+.-mode") or lowerName:find("%s+while%s+")
+    if suffix then name = name:sub(1, suffix - 1) end
     return cleanCharacterName(name)
 end
 local function getQuestCharacter(dailyQuest, slot)
@@ -247,13 +257,116 @@ local function getQuestComboGoal(dailyQuest, slot, screen)
     if goal and goal > 0 then return goal end
 end
 
-local function getScreenQuestData()
+local function selectedQuest(dailyQuest, slot)
+    local ok, data = pcall(function() return HttpService:JSONDecode(tostring(dailyQuest.Value or "")) end)
+    if not ok or type(data) ~= "table" then return nil end
+    local quest = data[slot] or data[tonumber(tostring(slot):match("%d+"))]
+    if type(quest) == "table" then return quest end
+end
+local function questDefinition(dailyQuest, slot)
+    local quest = selectedQuest(dailyQuest, slot)
+    if not quest then return nil end
+    local req = type(quest.Requirements) == "table" and quest.Requirements or {}
+    local texts = {}
+    for _, field in ipairs({"Description", "Text", "Title", "Name", "Desc"}) do
+        if type(quest[field]) == "string" then table.insert(texts, quest[field]) end
+    end
+    local description = table.concat(texts, " ")
+    local lower = description:lower()
+    local mode = req.Mode == true or req.Awakened == true or lower:find("mode", 1, true) or lower:find("awaken", 1, true)
+    local kind, target
+    for _, field in ipairs({"Combo", "Damage", "Points", "Kills"}) do
+        local value = tonumber(req[field])
+        if value and value > 0 then kind, target = field, value; break end
+    end
+    if not kind then
+        if lower:find("combo") then kind, target = "Combo", comboGoalFromText(description)
+        elseif lower:find("damage") then kind, target = "Damage", tonumber(lower:match("(%d+)%s+damage"))
+        elseif lower:find("point") then kind, target = "Points", tonumber(lower:match("(%d+)%s+points?"))
+        elseif lower:find("kill") then kind, target = "Kills", tonumber(lower:match("(%d+)%s+kills?")) end
+    end
+    if kind == "Kills" and mode then kind = "ModeKills" end
+    return {Type = kind, Target = target, Character = getQuestCharacter(dailyQuest, slot), RequiresMode = not not mode}
+end
+local function visibleQuestLabel(label)
+    local parent = label
+    while parent and parent ~= LocalPlayer.PlayerGui do
+        if parent:IsA("GuiObject") and not parent.Visible then return false end
+        if parent:IsA("ScreenGui") and not parent.Enabled then return false end
+        parent = parent.Parent
+    end
+    return true
+end
+
+local function sameQuestType(a, b)
+    return a == b or ((a == "Kills" or a == "ModeKills") and (b == "Kills" or b == "ModeKills"))
+end
+local function slotQuestProgress(quest, kind)
+    if type(quest) ~= "table" then return nil end
+    local key = kind == "ModeKills" and "Kills" or kind
+    if type(quest.Progress) == "table" then
+        local value = tonumber(quest.Progress[key])
+        if value then return value end
+    end
+    return tonumber(quest.Current) or tonumber(quest.CurrentProgress)
+end
+local function slotQuestDone(quest)
+    return type(quest) == "table" and (quest.Completed == true or quest.Complete == true
+        or quest.IsCompleted == true or (type(quest.Status) == "string" and quest.Status:lower() == "completed"))
+end
+local function watchQuestProgress(target)
+    local label, textConnection, ancestryConnection
+    local state = {Current = 0, Reached = false, Seen = false, Missing = false}
+    local function snapshot()
+        if not label then return end
+        local ok, text = pcall(function() return label.Text end)
+        if ok then
+            local current, total = tostring(text):match("(%d+)%s*/%s*(%d+)")
+            current, total = tonumber(current), tonumber(total)
+            if current and total == target then
+                state.Current = math.max(state.Current, current)
+                state.Reached = state.Reached or (target > 0 and current >= target)
+            end
+        end
+        state.Missing = label.Parent == nil or not visibleQuestLabel(label)
+    end
+    local function disconnect()
+        if textConnection then textConnection:Disconnect(); textConnection = nil end
+        if ancestryConnection then ancestryConnection:Disconnect(); ancestryConnection = nil end
+    end
+    local function bind(screen)
+        if not screen or not screen.SourceLabel then return end
+        state.Seen = true
+        state.Current = math.max(state.Current, screen.Current or 0)
+        state.Reached = state.Reached or (target > 0 and (screen.Current or 0) >= target)
+        if label ~= screen.SourceLabel then
+            disconnect()
+            label = screen.SourceLabel
+            textConnection = label:GetPropertyChangedSignal("Text"):Connect(snapshot)
+            ancestryConnection = label.AncestryChanged:Connect(snapshot)
+        end
+        snapshot()
+    end
+    return state, bind, snapshot, disconnect
+end
+
+local function getScreenQuestData(expectedType, expectedCharacter, expectedTarget)
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return nil end
 
     for _, v in ipairs(pg:GetDescendants()) do
-        if v:IsA("TextLabel") and v.Text and v.Text ~= "" then
+        if (v:IsA("TextLabel") or v:IsA("TextButton")) and visibleQuestLabel(v) and v.Text and v.Text ~= "" then
             local text = v.Text
+            if text:match("%d+%s*/%s*%d+") and not text:lower():find("kill")
+                and not text:lower():find("damage") and not text:lower():find("point")
+                and not text:lower():find("combo") and v.Parent then
+                for _, sibling in ipairs(v.Parent:GetChildren()) do
+                    if sibling ~= v and (sibling:IsA("TextLabel") or sibling:IsA("TextButton")) and visibleQuestLabel(sibling)
+                        and not sibling.Text:match("%d+%s*/%s*%d+") then
+                        text = sibling.Text .. " " .. text
+                    end
+                end
+            end
             local cur, total = text:match("%-%s*(%d+)%s*/%s*(%d+)")
             if not total then
                 cur, total = text:match("(%d+)%s*/%s*(%d+)")
@@ -269,25 +382,29 @@ local function getScreenQuestData()
                     local reqType = "Kills"
                     if lower:find("combo") then
                         reqType = "Combo"
-                    elseif isMode then
-                        reqType = "ModeKills"
                     elseif lower:find("damage") or lower:find("deal") then
                         reqType = "Damage"
                     elseif lower:find("point") then
                         reqType = "Points"
-                    elseif lower:find("combo") then
-                        reqType = "Combo"
+                    elseif isMode then
+                        reqType = "ModeKills"
                     end
 
                     local detectedChar = parseCharacterName(text)
 
-                    return {
+                    local match = (not expectedType or sameQuestType(reqType, expectedType))
+                        and (not expectedTarget or t == expectedTarget)
+                    if match and expectedCharacter and expectedCharacter ~= "" and detectedChar ~= "" then
+                        match = characterKey(detectedChar) == characterKey(expectedCharacter)
+                    end
+                    if match then return {
                         Current = c,
                         Target = t,
                         Type = reqType,
                         Character = detectedChar,
-                        RawText = text
-                    }
+                        RawText = text,
+                        SourceLabel = v
+                    } end
                 end
             end
         end
@@ -906,6 +1023,13 @@ local function v12()
                     end
                     v86 = true
                 end
+                local definition = questDefinition(v85, v91)
+                if definition then
+                    if definition.Type then s1 = definition.Type end
+                    if definition.Target and definition.Target > 0 then n2 = definition.Target end
+                    if definition.Character ~= "" then s2 = definition.Character end
+                    v86 = n2 > 0
+                end
                 local authoritativeCharacter = getQuestCharacter(v85, v91)
                 if authoritativeCharacter ~= "" then s2 = authoritativeCharacter end
 
@@ -930,6 +1054,8 @@ local function v12()
                 return
             end
 
+            local definition = questDefinition(v85, v91)
+            local needsMode = (definition and definition.RequiresMode) or s1 == "ModeKills"
             print(string.format("🎯 Target Loaded | Mode: %s | Target: %d | Character: '%s'", s1, n2, s2))
             notify(string.format("Quest: %s (%s) | Target: %d", s2, s1, n2))
 
@@ -954,11 +1080,10 @@ local function v12()
 
                 if not running() then return end
 
-                local gqSpawn = getScreenQuestData()
+                local gqSpawn = getScreenQuestData(s1, s2, s1 ~= "Combo" and n2 or nil)
                 if gqSpawn and gqSpawn.Target and gqSpawn.Target > 0 then
                     if s1 ~= "Combo" then
-                        s1 = gqSpawn.Type
-                        n2 = gqSpawn.Target
+                        -- Keep the selected quest definition after respawn.
                     end
                     local updatedCharacter = getQuestCharacter(v85, v91)
                     if updatedCharacter == "" then updatedCharacter = gqSpawn.Character or "" end
@@ -977,7 +1102,11 @@ local function v12()
                     local basePoints = (leaderstats and leaderstats:FindFirstChild("Points") and tonumber(leaderstats.Points.Value)) or 0
 
                     local peakCombo = 0
-                    local completionSamples = 0
+                    local initialScreen = getScreenQuestData(s1, s2, n2)
+                    local initialProgress = initialScreen and initialScreen.Current or slotQuestProgress(selectedQuest(v85, v91), s1) or 0
+                    local watched, bindQuest, snapshotQuest, disconnectQuest = watchQuestProgress(n2)
+                    if s1 ~= "Combo" then bindQuest(initialScreen) end
+                    local lastProgressLog = 0
                     print(string.format("📊 Quest tracking: %s | Required: %d", s1, n2))
                     while running() and not u87 do
                         task.wait(0.1)
@@ -993,18 +1122,35 @@ local function v12()
                                 print(string.format("✅ Actual Combo reached: %d/%d", current, n2))
                             end
                         else
-                            local qData = getScreenQuestData()
-                            local sameQuest = qData and qData.Type == s1 and qData.Target == n2
-                            if sameQuest and s2 ~= "" then
-                                sameQuest = qData.Character and qData.Character ~= ""
-                                    and characterKey(qData.Character) == characterKey(s2)
+                            local qData = getScreenQuestData(s1, s2, n2)
+                            bindQuest(qData)
+                            snapshotQuest()
+                            local slotQuest = selectedQuest(v85, v91)
+                            local current = qData and qData.Current or slotQuestProgress(slotQuest, s1)
+                            local source = qData and "Quest GUI" or "DailyQuest"
+                            if current == nil and s1 == "Kills" and not needsMode then
+                                local stat = leaderstats and leaderstats:FindFirstChild("Kills")
+                                local gained = stat and math.max(0, (tonumber(stat.Value) or baseKills) - baseKills) or 0
+                                current = initialProgress + gained
+                                source = "Kill delta"
                             end
-                            if sameQuest and n2 > 0 and qData.Current >= n2 then
-                                completionSamples += 1
-                            else
-                                completionSamples = 0
+                            if watched.Reached then
+                                current, source = watched.Current, "Captured quest completion"
+                            elseif watched.Seen and watched.Missing and not qData and (s1 == "Kills" or s1 == "ModeKills") then
+                                local stat = leaderstats and leaderstats:FindFirstChild("Kills")
+                                local gained = stat and math.max(0, (tonumber(stat.Value) or baseKills) - baseKills) or 0
+                                if initialProgress + gained >= n2 and n2 > 0 then
+                                    current, source = initialProgress + gained, "Quest disappeared + kill goal reached"
+                                end
                             end
-                            isDone = completionSamples >= 2
+                            isDone = watched.Reached or slotQuestDone(slotQuest) or (current ~= nil and n2 > 0 and current >= n2)
+                            if os.clock() - lastProgressLog >= 10 then
+                                lastProgressLog = os.clock()
+                                local message = string.format("%s: %s/%d (%s)", s1, current ~= nil and tostring(current) or "?", n2, source)
+                                print("[Quest Progress] " .. message)
+                                notify(message)
+                            end
+                            if isDone then print("[Quest Complete] " .. source .. " | " .. tostring(current) .. "/" .. n2) end
                         end
 
                         -- เมื่อทำเควสต์เสร็จ: หยุดตีทันที -> หน่วงเวลา 2.5 วินาทีรอ EXP -> แล้ววาร์ป
@@ -1025,18 +1171,24 @@ local function v12()
                             notify("Returning to Training...")
 
                             task.spawn(function()
-                                local Train = ReplicatedStorage:WaitForChild("Train", 5) or ReplicatedStorage:FindFirstChild("Train")
-                                if Train then
-                                    for _ = 1, 10 do
-                                        if not running() then break end
-                                        pcall(function() Train:FireServer() end)
-                                        task.wait(0.3)
+                                local Train = ReplicatedStorage:WaitForChild("Train", 10)
+                                if not Train then notify("Train remote not found."); return end
+                                for attempt = 1, 3 do
+                                    if not running() then return end
+                                    local ok, err = pcall(function() Train:FireServer() end)
+                                    if ok then
+                                        notify("Training request sent (" .. attempt .. "/3)")
+                                    else
+                                        warn("Train remote error: " .. tostring(err))
+                                        notify("Training request failed: " .. tostring(err))
                                     end
+                                    task.wait(3)
                                 end
                             end)
                             break
                         end
                     end
+                    disconnectQuest()
                 end)
 
                 -- ⚔️ Combat Loop (จำกัดการวาร์ปตีคนละไม่เกิน 5 วินาที)
@@ -1167,18 +1319,11 @@ local function v12()
                             end
                         end
 
-                        if s1 == "ModeKills" and (os.clock() - lastModeTry >= 0.5) then
+                        if needsMode and (os.clock() - lastModeTry >= 0.5) then
                             lastModeTry = os.clock()
                             pcall(function()
-                                local inp = getInput()
-                                if inp then
-                                    inp:FireServer("Awaken")
-                                    inp:FireServer("Awakening")
-                                    inp:FireServer("Mode")
-                                end
-
                                 VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.G, false, game)
-                                task.wait(0.15)
+                                task.wait(0.05)
                                 VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.G, false, game)
                             end)
                         end
