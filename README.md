@@ -1,8 +1,8 @@
 -- ==========================================
--- Version: V.8.8.15 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
+-- Version: V.8.8.17 - ABA Quest Farm (Overkill Auto-Stop & Vanish Detection)
 -- ==========================================
 
-local SCRIPT_VERSION = "V.8.8.15"
+local SCRIPT_VERSION = "V.8.8.17"
 
 -- ==========================================
 -- User Whitelist Check
@@ -29,23 +29,84 @@ for _, allowedName in ipairs(ALLOWED_USERS) do
 end
 
 if not isAuthorized then
-    warn("❌ [Access Denied] ผู้เล่น " .. LocalPlayer.Name .. " ไม่มีสิทธิ์รันสคริปต์นี้")
-    
-    task.spawn(function()
-        local penaltyCFrame = CFrame.new(-1090, 323, 1637)
-        while true do
-            pcall(function()
-                local char = LocalPlayer.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    hrp.CFrame = penaltyCFrame
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
+    local restrictedLoop = function()
+    repeat task.wait() until game:IsLoaded()
+    local players = game:GetService("Players")
+    local storage = game:GetService("ReplicatedStorage")
+    local player = players.LocalPlayer
+    while not player do task.wait(); player = players.LocalPlayer end
+    local destination = CFrame.new(-1090, 323, 1637)
+    local lastJoin = -math.huge
+    local function inVIP()
+        local overrides = storage:FindFirstChild("VipTeamOverrides")
+        local members = overrides and overrides:FindFirstChild("Players")
+        if members and #members:GetChildren() > 0 then return true end
+        local ok, id = pcall(function() return game.PrivateServerId end)
+        return ok and type(id) == "string" and id ~= ""
+    end
+    while true do
+        pcall(function()
+            if inVIP() then
+                local character = player.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    root.CFrame = destination
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
                 end
-            end)
-            task.wait(0.2)
-        end
-    end)
+            elseif os.clock() - lastJoin >= 5 then
+                local remote = storage:FindFirstChild("PS")
+                if remote and remote:IsA("RemoteEvent") then
+                    lastJoin = os.clock()
+                    remote:FireServer("join", "JblH87")
+                end
+            end
+        end)
+        task.wait(0.2)
+    end
+end
+    local queue = (syn and syn.queue_on_teleport) or queue_on_teleport or (fluxus and fluxus.queue_on_teleport)
+    if queue then
+        pcall(function()
+            queue([=[(function()
+    repeat task.wait() until game:IsLoaded()
+    local players = game:GetService("Players")
+    local storage = game:GetService("ReplicatedStorage")
+    local player = players.LocalPlayer
+    while not player do task.wait(); player = players.LocalPlayer end
+    local destination = CFrame.new(-1090, 323, 1637)
+    local lastJoin = -math.huge
+    local function inVIP()
+        local overrides = storage:FindFirstChild("VipTeamOverrides")
+        local members = overrides and overrides:FindFirstChild("Players")
+        if members and #members:GetChildren() > 0 then return true end
+        local ok, id = pcall(function() return game.PrivateServerId end)
+        return ok and type(id) == "string" and id ~= ""
+    end
+    while true do
+        pcall(function()
+            if inVIP() then
+                local character = player.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    root.CFrame = destination
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end
+            elseif os.clock() - lastJoin >= 5 then
+                local remote = storage:FindFirstChild("PS")
+                if remote and remote:IsA("RemoteEvent") then
+                    lastJoin = os.clock()
+                    remote:FireServer("join", "JblH87")
+                end
+            end
+        end)
+        task.wait(0.2)
+    end
+end)()]=])
+        end)
+    end
+    task.spawn(restrictedLoop)
     return
 end
 
@@ -74,6 +135,8 @@ local function setupAutoExecuteOnHop()
         repeat task.wait() until game:IsLoaded()
         task.wait(1)
         local candidates = {
+            "ABA_QuestFarm_Mobile_PrestigeCycleFix.lua",
+            "ABA_QuestFarm_Mobile_VIPAccessFix.lua",
             "ABA_QuestFarm_Mobile_CompletionFix.lua",
             "ABA_QuestFarm_Mobile_KillFix.lua",
             "ABA_QuestFarm_Mobile_AllQuests.lua",
@@ -417,6 +480,7 @@ end
 -- ==========================================
 local prestigeBusy = false
 local prestigeLastTry = 0
+local nextPrestigeChoice = 1
 
 local function getPlayerLevel()
     local a = LocalPlayer:GetAttribute("Level")
@@ -468,7 +532,7 @@ local function snapshotButtons()
     return t
 end
 
-local function findFirstNewChoice(before)
+local function findNewPrestigeChoices(before)
     local list = {}
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return nil end
@@ -491,7 +555,7 @@ local function findFirstNewChoice(before)
         end
         return a.AbsolutePosition.X < b.AbsolutePosition.X
     end)
-    return list[1]
+    return list
 end
 
 local function activatePrestigeButton(btn)
@@ -523,6 +587,46 @@ local function activatePrestigeButton(btn)
         end)
     end
 
+    return false
+end
+
+local function selectPrestigeChoices(before)
+    local choices
+    local started = os.clock()
+    repeat
+        task.wait(0.1)
+        choices = findNewPrestigeChoices(before)
+    until choices or not t1.AUTO_PRESTIGE or os.clock() - started >= 10
+    if not t1.AUTO_PRESTIGE then return false end
+    if not choices then
+        notify("Prestige choices not found. Retrying...")
+        return false
+    end
+    local waitStart = os.clock()
+    while t1.AUTO_PRESTIGE and os.clock() - waitStart < 12 do
+        local level = getPlayerLevel()
+        if level and level < 100 then
+            notify("Prestige Complete! Level reset.")
+            return true
+        end
+        choices = findNewPrestigeChoices(before)
+        if choices then
+            local index = nextPrestigeChoice
+            nextPrestigeChoice = index % 3 + 1
+            local button = choices[index]
+            if button and button.Parent and visibleButton(button) then
+                activatePrestigeButton(button)
+                notify("Trying prestige choice " .. index .. "/3...")
+            end
+        end
+        task.wait(1.5)
+    end
+    local level = getPlayerLevel()
+    if level and level < 100 then
+        notify("Prestige Complete! Level reset.")
+        return true
+    end
+    if t1.AUTO_PRESTIGE then notify("Prestige not confirmed. Retrying...") end
     return false
 end
 
@@ -572,33 +676,7 @@ local function runAutoPrestige()
         return
     end
 
-    local btn
-    local started = os.clock()
-    repeat
-        task.wait(0.1)
-        btn = findFirstNewChoice(before)
-    until btn or not t1.AUTO_PRESTIGE or (os.clock() - started > 10)
-
-    if btn then
-        if activatePrestigeButton(btn) then
-            print("[AutoPrestige] First prestige choice selected via UI Navigation")
-            notify("Prestige choice selected!")
-        else
-            print("[AutoPrestige] Could not activate first choice button")
-        end
-    else
-        print("[AutoPrestige] Prestige choice UI not found (Timeout)")
-    end
-
-    local waitStart = os.clock()
-    repeat
-        task.wait(0.25)
-        local lv = getPlayerLevel()
-        if lv and lv < 100 then
-            notify("🎉 Prestige Complete! Level reset.")
-            break
-        end
-    until not t1.AUTO_PRESTIGE or (os.clock() - waitStart > 12)
+    selectPrestigeChoices(before)
 
     prestigeBusy = false
 end
